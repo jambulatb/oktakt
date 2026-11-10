@@ -1,0 +1,27 @@
+# Builds the macOS disk image on GitHub's Mac runner.
+# Run it from the Actions tab (Run workflow) or by pushing a tag like v0.1.0.
+# The .dmg appears under the run's Artifacts.
+name: macOS installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Third-party code
+        run: bash scripts/fetch-deps.sh
+      - name: Ninja
+        run: brew install ninja
+      - name: Build and pack
+        run: bash scripts/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OKTAKT-macOS
+          path: dist-macos/*.dmg
+          if-no-files-found: error

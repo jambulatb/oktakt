@@ -3,3 +3,5 @@ dist/
 external/
 *.user
 .vscode/
+build-mac/
+dist-macos/

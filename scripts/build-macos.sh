@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds OKTAKT on a Mac and packs it into one installer (.pkg) in dist-macos/.
-# The installer lets you pick what to install: the app (Standalone), VST3, AU, CLAP and the demo kit.
+# Builds OKTAKT on a Mac and packs it into a disk image (.dmg) in dist-macos/ with two installers:
+#   Install OKTAKT.pkg    tick what to install: the app (Standalone), VST3, AU, CLAP and the demo kit
+#   Uninstall OKTAKT.pkg  tick what to remove; lists only the parts installed on this Mac
 #
 # Needs: Xcode Command Line Tools (xcode-select --install) and CMake 3.24+ (brew install cmake).
 #
@@ -151,29 +152,141 @@ cat > "$STAGE/res/conclusion.html" <<EOF
 <li>The app is in <b>Applications</b>.</li>
 <li>In your DAW, rescan plug-ins if OKTAKT does not show up: it is an instrument by OKTAKT.</li>
 <li>Logic Pro: for separate track outputs, load it as <b>Multi Output (16xStereo)</b>.</li>
+<li>To remove OKTAKT later, run <b>Uninstall OKTAKT</b> from the same disk image.</li>
 </ul>
 </body></html>
 EOF
 
-mkdir -p dist-macos
-PKG="dist-macos/OKTAKT-$VERSION-macOS.pkg"
-rm -f "$PKG"
+# ---- the uninstaller -----------------------------------------------------------
+# Payload-free packages: each one only runs a script that removes one component.
+# Its checkboxes show only what is installed on this Mac; settings are off by default,
+# saved patterns in ~/Documents/OKTAKT are never touched.
+UN="$STAGE/uninstall"
+mkdir -p "$UN"/{pkgs,res}
+
+remover_pkg() {   # <name> <script body>
+    local name=$1 body=$2 dir="$UN/scripts-$1"
+    mkdir -p "$dir"
+    printf '#!/bin/sh\n%s\nexit 0\n' "$body" > "$dir/postinstall"
+    chmod +x "$dir/postinstall"
+    pkgbuild --nopayload --scripts "$dir" --identifier "com.oktakt.uninstall.$name" --version "$VERSION" \
+             "$UN/pkgs/remove-$name.pkg" >/dev/null
+}
+remover_pkg app  'rm -rf "/Applications/OKTAKT.app"; pkgutil --forget com.oktakt.pkg.app >/dev/null 2>&1 || true'
+remover_pkg vst3 'rm -rf "/Library/Audio/Plug-Ins/VST3/OKTAKT.vst3"; pkgutil --forget com.oktakt.pkg.vst3 >/dev/null 2>&1 || true'
+remover_pkg au   'rm -rf "/Library/Audio/Plug-Ins/Components/OKTAKT.component"; pkgutil --forget com.oktakt.pkg.au >/dev/null 2>&1 || true
+killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true'
+remover_pkg clap 'rm -rf "/Library/Audio/Plug-Ins/CLAP/OKTAKT.clap"; pkgutil --forget com.oktakt.pkg.clap >/dev/null 2>&1 || true'
+remover_pkg demo 'rm -rf "/Library/Application Support/OKTAKT"; pkgutil --forget com.oktakt.pkg.demo >/dev/null 2>&1 || true'
+remover_pkg settings 'U=$(stat -f %Su /dev/console)
+H=$(dscl . -read "/Users/$U" NFSHomeDirectory 2>/dev/null | sed "s/^NFSHomeDirectory: //")
+[ -n "$H" ] && [ -d "$H/Library/Application Support/OKTAKT" ] && rm -rf "$H/Library/Application Support/OKTAKT"'
+
+cat > "$UN/distribution.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Uninstall OKTAKT</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="always" require-scripts="true" hostArchitectures="$HOST_ARCHS"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <installation-check script="canUninstall()"/>
+    <script><![CDATA[
+var P = {
+    app:  '/Applications/OKTAKT.app',
+    vst3: '/Library/Audio/Plug-Ins/VST3/OKTAKT.vst3',
+    au:   '/Library/Audio/Plug-Ins/Components/OKTAKT.component',
+    clap: '/Library/Audio/Plug-Ins/CLAP/OKTAKT.clap',
+    demo: '/Library/Application Support/OKTAKT'
+};
+function has(k) { return system.files.fileExistsAtPath(P[k]); }
+function canUninstall() {
+    if (!(has('app') || has('vst3') || has('au') || has('clap') || has('demo'))) {
+        my.result.type = 'Fatal';
+        my.result.title = 'OKTAKT is not installed';
+        my.result.message = 'There is nothing to remove on this Mac.';
+        return false;
+    }
+    var running = system.applications.fromIdentifier('com.oktakt.sampler');
+    if (running && (running.length === undefined || running.length > 0)) {
+        my.result.type = 'Fatal';
+        my.result.title = 'Quit OKTAKT first';
+        my.result.message = 'The OKTAKT app is open. Quit it and run the uninstaller again.';
+        return false;
+    }
+    return true;
+}
+    ]]></script>
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="vst3"/>
+        <line choice="au"/>
+        <line choice="clap"/>
+        <line choice="demo"/>
+        <line choice="settings"/>
+    </choices-outline>
+    <choice id="app" title="OKTAKT app (Standalone)" description="Removes /Applications/OKTAKT.app." start_visible="has('app')" start_selected="has('app')"><pkg-ref id="com.oktakt.uninstall.app"/></choice>
+    <choice id="vst3" title="VST3 plug-in" description="Removes OKTAKT.vst3 from /Library/Audio/Plug-Ins/VST3. Projects that use it will open without it." start_visible="has('vst3')" start_selected="has('vst3')"><pkg-ref id="com.oktakt.uninstall.vst3"/></choice>
+    <choice id="au" title="Audio Unit plug-in" description="Removes OKTAKT.component from /Library/Audio/Plug-Ins/Components." start_visible="has('au')" start_selected="has('au')"><pkg-ref id="com.oktakt.uninstall.au"/></choice>
+    <choice id="clap" title="CLAP plug-in" description="Removes OKTAKT.clap from /Library/Audio/Plug-Ins/CLAP." start_visible="has('clap')" start_selected="has('clap')"><pkg-ref id="com.oktakt.uninstall.clap"/></choice>
+    <choice id="demo" title="Demo kit" description="Removes /Library/Application Support/OKTAKT with the demo samples." start_visible="has('demo')" start_selected="has('demo')"><pkg-ref id="com.oktakt.uninstall.demo"/></choice>
+    <choice id="settings" title="App settings" description="Removes the audio device and other app settings from your user Library. Saved patterns in Documents/OKTAKT stay." start_selected="false"><pkg-ref id="com.oktakt.uninstall.settings"/></choice>
+    <pkg-ref id="com.oktakt.uninstall.app" version="$VERSION" onConclusion="none">remove-app.pkg</pkg-ref>
+    <pkg-ref id="com.oktakt.uninstall.vst3" version="$VERSION" onConclusion="none">remove-vst3.pkg</pkg-ref>
+    <pkg-ref id="com.oktakt.uninstall.au" version="$VERSION" onConclusion="none">remove-au.pkg</pkg-ref>
+    <pkg-ref id="com.oktakt.uninstall.clap" version="$VERSION" onConclusion="none">remove-clap.pkg</pkg-ref>
+    <pkg-ref id="com.oktakt.uninstall.demo" version="$VERSION" onConclusion="none">remove-demo.pkg</pkg-ref>
+    <pkg-ref id="com.oktakt.uninstall.settings" version="$VERSION" onConclusion="none">remove-settings.pkg</pkg-ref>
+</installer-gui-script>
+EOF
+
+cat > "$UN/res/welcome.html" <<EOF
+<html><head><meta charset="utf-8">$STYLE</head><body>
+<h2>Uninstall OKTAKT</h2>
+<p>On the next screens tick what to remove. Only the parts installed on this Mac are listed.</p>
+<p>Your saved patterns in <b>Documents/OKTAKT</b> and your own samples are not touched.</p>
+</body></html>
+EOF
+cat > "$UN/res/conclusion.html" <<EOF
+<html><head><meta charset="utf-8">$STYLE</head><body>
+<h2>OKTAKT is removed</h2>
+<p>The parts you ticked are gone. In your DAW, rescan plug-ins so it forgets OKTAKT.</p>
+</body></html>
+EOF
+
+# ---- the disk image ------------------------------------------------------------
+DMGSRC="$STAGE/dmg"
+mkdir -p "$DMGSRC"
 SIGN_ARGS=()
 [ -n "$SIGN_PKG" ] && SIGN_ARGS=(--sign "$SIGN_PKG" --timestamp)
 productbuild --distribution "$STAGE/distribution.xml" --resources "$STAGE/res" \
-             --package-path "$STAGE/pkgs" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} "$PKG"
+             --package-path "$STAGE/pkgs" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} "$DMGSRC/Install OKTAKT.pkg"
+productbuild --distribution "$UN/distribution.xml" --resources "$UN/res" \
+             --package-path "$UN/pkgs" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} "$DMGSRC/Uninstall OKTAKT.pkg"
+
+mkdir -p dist-macos
+DMG="dist-macos/OKTAKT-$VERSION-macOS.dmg"
+rm -f "$DMG"
+echo "== Making $DMG"
+n=0
+until hdiutil create -volname "OKTAKT $VERSION" -srcfolder "$DMGSRC" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null; do
+    n=$((n + 1)); [ $n -ge 3 ] && fail "hdiutil could not create the disk image"
+    sleep 3   # "Resource busy" happens now and then; a retry clears it
+done
+[ -n "$SIGN_APP" ] && codesign --force --timestamp --sign "$SIGN_APP" "$DMG"
 
 if [ -n "$NOTARY" ]; then
-    [ -n "$SIGN_PKG" ] || fail "Notarizing needs OKTAKT_SIGN_PKG and OKTAKT_SIGN_APP"
+    [ -n "$SIGN_PKG" ] && [ -n "$SIGN_APP" ] || fail "Notarizing needs OKTAKT_SIGN_PKG and OKTAKT_SIGN_APP"
     echo "== Notarizing (a few minutes)"
-    xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY" --wait
-    xcrun stapler staple "$PKG"
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY" --wait
+    xcrun stapler staple "$DMG"
 fi
 
 echo
-echo "Done: $PWD/$PKG"
-echo "Double-click it; the 'Installation Type' step has Customize, where you tick what to install."
+echo "Done: $PWD/$DMG"
+echo "Open it: 'Install OKTAKT' has Customize on the 'Installation Type' step, where you tick what to install;"
+echo "'Uninstall OKTAKT' removes what you tick."
 if [ -z "$SIGN_PKG" ]; then
-    echo "The installer is not signed with a Developer ID: it opens on this Mac. On another Mac,"
-    echo "macOS blocks it at first: System Settings > Privacy & Security > Open Anyway."
+    echo "The installers are not signed with a Developer ID: they open on this Mac. On another Mac,"
+    echo "macOS blocks them at first: System Settings > Privacy & Security > Open Anyway."
 fi
