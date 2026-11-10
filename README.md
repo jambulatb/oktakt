@@ -46,6 +46,25 @@ sudo apt install build-essential cmake ninja-build pkg-config git libasound2-dev
 
 Среда выполнения C++ встроена в файлы, VC++ Redistributable ставить не нужно. ASIO не включён: для него нужен ASIO SDK от Steinberg.
 
+### Установщик для Windows
+
+`scripts\build-windows-installer.bat` собирает всё то же и упаковывает в один файл `dist-windows\OKTAKT-<версия>-Windows-Setup.exe`. Дополнительно нужен **Inno Setup** 6.5.2 или новее: https://jrsoftware.org/isdl.php.
+
+Без Windows его собирает GitHub: **Actions → Windows installer → Run workflow**, готовый `Setup.exe` появится в разделе **Artifacts** запуска (`.github/workflows/windows.yml`).
+
+В установщике галочками отмечается, что ставить:
+
+| Компонент | Куда ставится |
+|---|---|
+| OKTAKT app (Standalone) | `C:\Program Files\OKTAKT`, ярлык в меню «Пуск» |
+| VST3 | `C:\Program Files\Common Files\VST3\OKTAKT.vst3` |
+| CLAP | `C:\Program Files\Common Files\CLAP\OKTAKT.clap` |
+| Демо-набор | `C:\ProgramData\OKTAKT\Demo Kit`, Standalone открывает его при первом запуске |
+
+Если OKTAKT уже стоит, установщик обновляет его и предлагает те же галочки, что в прошлый раз. Удаление: **Параметры → Приложения → OKTAKT → Удалить**. Оно спрашивает, стереть ли и настройки приложения (по умолчанию нет); паттерны в `Документы\OKTAKT` не трогаются. Если приложение открыто, установщик и удаление просят сначала его закрыть.
+
+Установщик не подписан сертификатом, поэтому при первом запуске Windows SmartScreen покажет предупреждение: «Подробнее» → «Выполнить в любом случае».
+
 ## Установщик для macOS
 
 Собирается на самом Mac: для macOS нужен компилятор Apple, из Linux её не собрать.

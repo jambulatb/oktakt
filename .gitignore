@@ -5,3 +5,5 @@ external/
 .vscode/
 build-mac/
 dist-macos/
+build-win/
+dist-windows/

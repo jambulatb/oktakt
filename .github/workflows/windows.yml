@@ -1,0 +1,31 @@
+# Builds the Windows installer on GitHub's Windows runner.
+# Run it from the Actions tab (Run workflow) or by pushing a tag like v0.1.0.
+# The Setup.exe appears under the run's Artifacts.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  setup:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Keep line endings as in the repo
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Third-party code
+        shell: bash
+        run: bash scripts/fetch-deps.sh
+      - name: Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build and pack
+        shell: cmd
+        run: scripts\build-windows-installer.bat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OKTAKT-Windows
+          path: dist-windows/*-Setup.exe
+          if-no-files-found: error
