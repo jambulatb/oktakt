@@ -238,6 +238,11 @@ juce::String GridRows::getTooltip()
             return {};
         }
         case Target::ParamRemove: return "Remove this row";
+        case Target::ParamCell:
+            if (t.param == ParamId::Random || t.param == ParamId::Accuracy)
+                if (auto* h = session.hitAt (tr.id, keyOf (t.bar, t.step)); h != nullptr && h->pinned)
+                    return juce::String (paramInfo (t.param).label) + " does not act on a pinned hit. Alt+click the hit to unpin";
+            return {};
         default: return {};
     }
 }
@@ -487,11 +492,13 @@ void GridRows::paintParamRow (juce::Graphics& g, const Item& it)
         if (b >= part.bars || st >= t.stepsPerBar()) continue;
         auto r = cellRect (t, b, st, (int) y, it.h);
         const float rad = juce::jmin (4.0f, r.getWidth() * 0.3f);
-        g.setColour (C::btn2);
+        // Random and Accuracy leave pinned hits alone: their values stay editable but greyed out
+        const bool inactive = h.pinned && (it.param == ParamId::Random || it.param == ParamId::Accuracy);
+        g.setColour (inactive ? C::cellB : C::btn2);
         g.fillRoundedRectangle (r, rad);
         const int v = effectiveValue (t, h, it.param);
         const bool set = isVel || h.has (it.param);
-        g.setColour (set ? C::text : C::muted);
+        g.setColour (inactive ? C::dim : set ? C::text : C::muted);
         auto text = fmtParam (it.param, v);
         float fs = r.getWidth() < 26 ? 10.0f : 12.0f;
         if (juce::GlyphArrangement::getStringWidthInt (mono (fs), text) > r.getWidth() - 2) fs = 9.0f;

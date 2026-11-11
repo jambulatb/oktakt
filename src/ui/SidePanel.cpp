@@ -74,14 +74,14 @@ SidePanel::SidePanel (Session& s, UiHost& h)
     random.set = [this] (int v) { if (auto* t = session.selectedTrack()) { t->random = v; session.changed(); } };
     random.format = [] (int v) { return juce::String (v) + "%"; };
     random.colour = [this] { auto* t = session.selectedTrack(); return t ? trackColour (t->colour) : C::orange; };
-    random.setTooltip ("Each pass drops some hits, adds quieter ones in empty cells and varies the level. 0% plays exactly what is written. Pinned hits stay as they are");
+    random.setTooltip ("Each pass drops some hits, adds quieter ones in empty cells and varies the level. 0% plays exactly what is written. A hit can set its own value in the Random row. Pinned hits stay as they are");
 
     setupKnob (accuracy, "Accuracy", 0, 100, 100, 32);
     accuracy.get = [this] { auto* t = session.selectedTrack(); return t ? t->accuracy : 100; };
     accuracy.set = [this] (int v) { if (auto* t = session.selectedTrack()) { t->accuracy = v; session.changed(); } };
     accuracy.format = [] (int v) { return juce::String (v) + "%"; };
     accuracy.colour = random.colour;
-    accuracy.setTooltip ("100% plays exactly as written. Lower values shift hits in time and vary their level, anew on every pass. Pinned hits stay as they are");
+    accuracy.setTooltip ("100% plays exactly as written. Lower values shift hits in time and vary their level, anew on every pass. A hit can set its own value in the Accuracy row. Pinned hits stay as they are");
 
     setupKnob (chance, "Chance", 0, 100, 100, 36);
     chance.get = [this] { return common ([] (const StepSettings& h) { return h.chance; }).value_or (100); };
@@ -94,7 +94,7 @@ SidePanel::SidePanel (Session& s, UiHost& h)
     micro.set = [this] (int v) { if (auto* t = session.selectedTrack()) { t->micro = v; session.changed(); } };
     micro.format = [] (int v) { return signedStr (v); };
     micro.colour = random.colour;
-    micro.setTooltip ("Moves every hit of the track earlier or later than its cell, less than one step (units of 1/24 step). Pinned hits stay in place. Adds to each hit's own Micro row");
+    micro.setTooltip ("Moves every hit of the track earlier or later than its cell, less than one step (units of 1/24 step). A hit can set its own value in the Micro row");
 
     setupKnob (fade, "Fade", -100, 100, 0, 36);
     fade.bipolar = true;

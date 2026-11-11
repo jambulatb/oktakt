@@ -280,7 +280,7 @@ struct Runner : juce::Timer
         o = onsets (render (48000));
         check (o.size() == 1 && near (o[0], 27000), "micro +12: onset " + list (o));
 
-        // POSITION Micro +12 moves every hit half a step later, except pinned ones
+        // POSITION Micro +12 moves every hit half a step later, pinned ones too
         clearAll();
         setHits (0, { 0, 8 });
         hit (0, 8).pinned = true;
@@ -288,7 +288,14 @@ struct Runner : juce::Timer
         s().changed();
         stopAndFlush();
         o = onsets (render (96000));
-        check (o.size() == 2 && near (o[0], 3000) && near (o[1], 48000), "POSITION micro +12 shifts unpinned hits only: onsets " + list (o));
+        check (o.size() == 2 && near (o[0], 3000) && near (o[1], 51000), "POSITION micro +12 shifts every hit: onsets " + list (o));
+
+        // ... and is only the track's value: a hit's own Micro replaces it
+        setHitParam (track (0), hit (0, 8), ParamId::Micro, -6);
+        s().changed();
+        stopAndFlush();
+        o = onsets (render (96000));
+        check (o.size() == 2 && near (o[0], 3000) && near (o[1], 48000 - 1500), "hit Micro -6 replaces the track's +12: onsets " + list (o));
         track (0).micro = 0;
 
         // Retrig 1/16 over 4 steps on the hat
@@ -408,6 +415,56 @@ struct Runner : juce::Timer
                "accuracy 0% varies the level of free hits (" + juce::String (freeMin, 3) + "-" + juce::String (freeMax, 3)
                + "), pinned stays " + juce::String (pinMin, 3));
         track (2).accuracy = 100;
+
+        // Random and Accuracy per hit: the track plays straight, one hit gets Accuracy 0 / Random 100
+        clearAll();
+        setHits (2, { 0, 8 });
+        setHitParam (track (2), hit (2, 8), ParamId::Accuracy, 0);
+        s().changed();
+        stopAndFlush();
+        o = onsets (render (96000 * 4));
+        {
+            int straight = 0, moved = 0;
+            for (auto x : o)
+            {
+                bool onBar = false;
+                for (int p = 0; p < 4; ++p) onBar = onBar || near (x, p * 96000);
+                if (onBar) ++straight;
+                else if (! near (x, 48000, 30) && ! near (x, 144000, 30) && ! near (x, 240000, 30) && ! near (x, 336000, 30)) ++moved;
+            }
+            check (straight == 4 && moved > 0, "hit Accuracy 0 jitters that hit only (" + list (o) + ")");
+        }
+        clearAll();
+        setHits (2, { 0, 8 });
+        setHitParam (track (2), hit (2, 8), ParamId::Random, 100);
+        s().changed();
+        stopAndFlush();
+        o = onsets (render (96000 * 8));
+        {
+            int first = 0, second = 0;
+            o.erase (std::remove_if (o.begin(), o.end(), [] (double x) { return x > 96000 * 8 - 1000; }), o.end());   // the next bar's start
+            for (auto x : o)
+                for (int p = 0; p < 8; ++p)
+                {
+                    if (near (x, p * 96000)) ++first;
+                    if (near (x, p * 96000 + 48000)) ++second;
+                }
+            check (first == 8 && second < 8 && (int) o.size() == first + second,
+                   "hit Random 100 drops that hit on some passes, no extra hits (" + juce::String (first) + " + " + juce::String (second) + ": " + list (o) + ")");
+        }
+        clearAll();
+        track (2).random = 100;
+        setHits (2, { 0, 8 });
+        setHitParam (track (2), hit (2, 0), ParamId::Random, 0);
+        s().changed();
+        stopAndFlush();
+        o = onsets (render (96000 * 4));
+        {
+            int first = 0;
+            for (auto x : o) for (int p = 0; p < 4; ++p) if (near (x, p * 96000)) ++first;
+            check (first == 4, "hit Random 0 plays on every pass in a track at Random 100");
+        }
+        track (2).random = 0;
 
         // Parts: A plays step 0, B plays step 8; B queued at part end
         clearAll();
@@ -716,6 +773,31 @@ struct Runner : juce::Timer
         track (0).step = StepSettings();
         hit (0, 4).marked = false;
 
+        // Version 1 files: the track's Micro was added to the hit's own and skipped pinned hits
+        {
+            auto old = d2.toVar();
+            old.getDynamicObject()->setProperty ("version", 1);
+            auto* t0 = old["tracks"][0].getDynamicObject();
+            t0->setProperty ("micro", 10);
+            auto hits = old["parts"][0]["tracks"][juce::Identifier (juce::String ((int) d2.tracks[0].id))];
+            for (auto& ho : *hits.getArray())
+            {
+                const int st = ho["step"];
+                if (st == 0) ho["params"].getDynamicObject()->setProperty ("Micro", 5);
+                if (st == 8) ho.getDynamicObject()->setProperty ("pinned", true);
+            }
+            auto d4 = Document::fromVar (old);
+            const auto& t4 = d4.tracks[0];
+            auto& h4 = d4.parts[0].tracks[t4.id].hits;
+            const int m0 = effectiveValue (t4, h4[keyOf (0, 0)], ParamId::Micro);
+            const int m4 = effectiveValue (t4, h4[keyOf (0, 4)], ParamId::Micro);
+            const int m8 = effectiveValue (t4, h4[keyOf (0, 8)], ParamId::Micro);
+            const int m12 = effectiveValue (t4, h4[keyOf (0, 12)], ParamId::Micro);
+            check (d4.version == 2 && t4.micro == 10 && m0 == 15 && m4 == 0 && m8 == 0 && m12 == 10
+                   && ! h4[keyOf (0, 12)].has (ParamId::Micro),
+                   "version 1 Micro converted: " + juce::String (m0) + " " + juce::String (m4) + " " + juce::String (m8) + " " + juce::String (m12));
+        }
+
         // Missing file is flagged on load, data kept
         auto v = juce::JSON::parse (json);
         auto doc3 = Document::fromVar (v.getProperty ("pattern", {}));
@@ -796,12 +878,15 @@ struct Runner : juce::Timer
         br.sound.play = PlayMode::Slices;
         br.sound.sensitivity = 60;
         s().rechop (br);
-        br.rows = { ParamId::Pitch, ParamId::Cutoff };
+        br.rows = { ParamId::Pitch, ParamId::Cutoff, ParamId::Random };
+        br.random = 20;
         auto& bh = s().doc.parts[0].tracks[br.id].hits;
         setHitParam (br, bh[keyOf (0, 6)], ParamId::Pitch, 3);
         setHitParam (br, bh[keyOf (1, 2)], ParamId::Pitch, -2);
         setHitParam (br, bh[keyOf (0, 3)], ParamId::Cutoff, 110);
         setHitParam (br, bh[keyOf (0, 10)], ParamId::Cutoff, 45);
+        setHitParam (br, bh[keyOf (0, 8)], ParamId::Random, 60);   // pinned: drawn greyed out
+        setHitParam (br, bh[keyOf (1, 0)], ParamId::Random, 60);
         bh[keyOf (0, 0)].pinned = true;
         bh[keyOf (0, 8)].pinned = true;
         bh[keyOf (0, 14)].velocity = 70;

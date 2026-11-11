@@ -26,7 +26,7 @@ inline juce::String sampleFileName (const juce::String& path)
 // Per-hit automation parameters (the rows under an active track)
 enum class ParamId : int
 {
-    Velocity, Micro,
+    Velocity, Micro, Random, Accuracy,
     Stretch, Pitch,
     Cutoff, Resonance, EnvAmount,
     Drive, BitReduction, SRReduction,
@@ -164,7 +164,7 @@ struct Track
     int volume = 100, pan = 0;
     bool mute = false, solo = false;
     int output = 0;               // 0 = Main, n = Out n+1
-    int random = 0, accuracy = 100;
+    int random = 0, accuracy = 100;   // base values of the per-hit Random / Accuracy rows
 
     SoundSettings sound;
     std::vector<ParamId> rows;    // automation rows besides Velocity
@@ -172,7 +172,7 @@ struct Track
     // STEP: one per track. Acts on the marked hits of a part, or on all its hits when none is marked
     StepSettings step;
 
-    // POSITION: shifts every hit of the track except pinned ones, added to the hit's own Micro
+    // POSITION: the track's Micro, the base value of the per-hit Micro row like SOUND is for the others
     int micro = 0;
 
     int stepsPerBar() const { return groups * steps; }
@@ -180,7 +180,7 @@ struct Track
 
 struct Document
 {
-    int version = 1;
+    int version = 2;   // 2: a hit's Micro replaces the track's instead of adding to it
     juce::String name { "New pattern" };
     int swing = 50;
     std::vector<Track> tracks;

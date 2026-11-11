@@ -341,6 +341,7 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
             }
         }
 
+        // The track's Random / Accuracy; a hit may set its own in the automation rows
         const double rnd = tr.random / 100.0;
         const double inacc = (100 - tr.accuracy) / 100.0;
 
@@ -365,23 +366,25 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                 if (! step.playsOnPass (passNo)) continue;
                 if (step.chance < 100 && hash01 (seed, tr.id, (uint64_t) ref.key, 1) * 100.0 >= step.chance) continue;
 
+                const double hRnd = h.pinned ? 0.0 : effectiveValue (tr, h, ParamId::Random) / 100.0;
+                const double hInacc = h.pinned ? 0.0 : (100 - effectiveValue (tr, h, ParamId::Accuracy)) / 100.0;
+
                 float vel = (float) h.velocity;
-                if (rnd > 0.0 && ! h.pinned)
+                if (hRnd > 0.0)
                 {
-                    if (hash01 (seed, tr.id, (uint64_t) ref.key, 2) < rnd * 0.5) continue;
-                    vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) ref.key, 3) * 2.0 - 1.0) * rnd * 0.5);
+                    if (hash01 (seed, tr.id, (uint64_t) ref.key, 2) < hRnd * 0.5) continue;
+                    vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) ref.key, 3) * 2.0 - 1.0) * hRnd * 0.5);
                     vel = juce::jlimit (1.0f, 127.0f, vel);
                 }
 
                 double t = ref.nominal;
                 if ((st % tr.steps) % 2 == 1) t += swingOff;
-                const int micro = juce::jlimit (-23, 23, effectiveValue (tr, h, ParamId::Micro) + (h.pinned ? 0 : tr.micro));
-                t += micro / 24.0 * stepLen;
-                if (inacc > 0.0 && ! h.pinned)
+                t += effectiveValue (tr, h, ParamId::Micro) / 24.0 * stepLen;
+                if (hInacc > 0.0)
                 {
                     // Accuracy loosens both timing and level
-                    t += (hash01 (seed, tr.id, (uint64_t) ref.key, 4) * 2.0 - 1.0) * inacc * 0.5 * stepLen;
-                    vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) ref.key, 8) * 2.0 - 1.0) * inacc * 0.5);
+                    t += (hash01 (seed, tr.id, (uint64_t) ref.key, 4) * 2.0 - 1.0) * hInacc * 0.5 * stepLen;
+                    vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) ref.key, 8) * 2.0 - 1.0) * hInacc * 0.5);
                     vel = juce::jlimit (1.0f, 127.0f, vel);
                 }
 
@@ -413,7 +416,7 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                     emit (base + t, ti, &h, vel, slice);
             }
 
-            // Random also adds quieter hits to empty cells
+            // The track's Random also adds quieter hits to empty cells
             if (rnd > 0.0)
             {
                 int ref = 0;

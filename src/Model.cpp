@@ -7,6 +7,8 @@ namespace ok
 static const ParamInfo kParams[kNumParams] = {
     { "Velocity",      "Velocity", "HIT",       0, 127 },
     { "Micro",         "Micro",    "HIT",       -23, 23 },
+    { "Random",        "Random",   "RANDOM",    0, 100 },
+    { "Accuracy",      "Accuracy", "RANDOM",    0, 100 },
     { "Stretch",       "Stretch",  "SAMPLE",    25, 400 },
     { "Pitch",         "Pitch",    "PITCH",     -24, 24 },
     { "Cutoff",        "Cutoff",   "FILTER",    0, 127 },
@@ -111,7 +113,9 @@ int baseValue (const Track& t, ParamId id)
     switch (id)
     {
         case ParamId::Velocity:     return 100;
-        case ParamId::Micro:        return 0;
+        case ParamId::Micro:        return t.micro;
+        case ParamId::Random:       return t.random;
+        case ParamId::Accuracy:     return t.accuracy;
         case ParamId::Stretch:      return s.stretch;
         case ParamId::Pitch:        return s.tune;
         case ParamId::Cutoff:       return s.cutoff;
@@ -413,7 +417,7 @@ juce::var Document::toVar() const
 Document Document::fromVar (const juce::var& v)
 {
     Document d;
-    d.version = (int) v.getProperty ("version", 1);
+    const int fileVersion = (int) v.getProperty ("version", 1);
     d.name = v.getProperty ("name", "Pattern").toString();
     d.swing = juce::jlimit (50, 75, (int) v.getProperty ("swing", 50));
     d.nextTrackId = (uint32_t) (int) v.getProperty ("nextTrackId", 1);
@@ -503,6 +507,14 @@ Document Document::fromVar (const juce::var& v)
                             }
                             h.pinned = (bool) ho.getProperty ("pinned", false);
                             h.sliceId = (int) ho.getProperty ("slice", -1);
+                            // Version 1 added the track's Micro to the hit's own, except on pinned hits:
+                            // keep where every hit played
+                            if (fileVersion < 2)
+                            {
+                                const auto& t = *d.findTrack (tid);
+                                const int own = h.has (ParamId::Micro) ? h.p[(size_t) ParamId::Micro] : 0;
+                                setHitParam (t, h, ParamId::Micro, own + (h.pinned ? 0 : t.micro));
+                            }
                             tp.hits[keyOf (bar, step)] = h;
                         }
                     }
