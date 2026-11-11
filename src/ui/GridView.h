@@ -46,6 +46,11 @@ public:
     // x positions of bars for the ruler: [x, width] per bar
     std::vector<juce::Range<float>> barRanges() const;
 
+    // Vertical span of each track for the tabs at the right edge; the open track's span covers its parameter rows
+    struct Span { int track = -1, y = 0, h = 0; };
+    std::vector<Span> trackSpans() const;
+    void setTabHover (int track);
+
 private:
     struct Item
     {
@@ -99,6 +104,38 @@ private:
     std::unique_ptr<juce::TextEditor> renameEd;
     uint32_t renamingId = 0;
     std::vector<int> playSteps;
+    int tabHover = -1;
+};
+
+// A column of track tabs between the grid and the side panel: pick a track without going back to its name
+class TrackTabs : public juce::Component, public juce::TooltipClient
+{
+public:
+    static constexpr int kWidth = 18;
+
+    TrackTabs (Session& s, GridRows& r, juce::Viewport& v) : session (s), rows (r), viewport (v) {}
+    void paint (juce::Graphics&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    juce::String getTooltip() override;
+
+private:
+    int trackAt (int y) const;
+    void setHover (int track);
+
+    Session& session;
+    GridRows& rows;
+    juce::Viewport& viewport;
+    int hover = -1;
+};
+
+class GridViewport : public juce::Viewport
+{
+public:
+    std::function<void()> onScroll;
+    void visibleAreaChanged (const juce::Rectangle<int>&) override { if (onScroll) onScroll(); }
 };
 
 class Ruler : public juce::Component
@@ -145,7 +182,8 @@ private:
     SwingBox swing;
     GridRows rows;
     Ruler ruler { session, rows };
-    juce::Viewport viewport;
+    GridViewport viewport;
+    TrackTabs tabs { session, rows, viewport };
     juce::Rectangle<int> hintArea, legendArea;
 };
 

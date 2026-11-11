@@ -125,6 +125,27 @@ std::vector<juce::Range<float>> GridRows::barRanges() const
     return out;
 }
 
+std::vector<GridRows::Span> GridRows::trackSpans() const
+{
+    std::vector<Span> out;
+    for (auto& it : items)
+    {
+        if (it.kind != Item::Track) continue;
+        Span sp { it.track, it.y, kRowH };
+        if (blockBottom >= 0 && session.doc.tracks[(size_t) it.track].id == session.selected)
+            sp.h = blockBottom - it.y;
+        out.push_back (sp);
+    }
+    return out;
+}
+
+void GridRows::setTabHover (int track)
+{
+    if (tabHover == track) return;
+    tabHover = track;
+    repaint();
+}
+
 juce::Rectangle<float> GridRows::cellRect (const Track& t, int bar, int step, int y, int h) const
 {
     auto bars = barRanges();
@@ -338,6 +359,11 @@ void GridRows::paintTrackRow (juce::Graphics& g, const Item& it, bool hoverRow)
     const int B = part.bars;
 
     if (sel)
+    {
+        g.setColour (C::rowSel);
+        g.fillRoundedRectangle (juce::Rectangle<float> (0, y, (float) getWidth(), (float) kRowH), 6.0f);
+    }
+    else if (it.track == tabHover)
     {
         g.setColour (C::rowSel);
         g.fillRoundedRectangle (juce::Rectangle<float> (0, y, (float) getWidth(), (float) kRowH), 6.0f);
@@ -1087,6 +1113,87 @@ void SwingBox::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDe
 }
 
 //==============================================================================
+int TrackTabs::trackAt (int y) const
+{
+    const int off = getLocalPoint (&rows, juce::Point<int>()).y;
+    // Each tab also takes the gap above it, so the column has no dead pixels
+    for (auto& sp : rows.trackSpans())
+        if (y >= sp.y + off - GridRows::kGap && y < sp.y + off + sp.h)
+            return sp.track;
+    return -1;
+}
+
+void TrackTabs::paint (juce::Graphics& g)
+{
+    const auto& tracks = session.doc.tracks;
+    const int off = getLocalPoint (&rows, juce::Point<int>()).y;
+    const float w = (float) getWidth();
+    for (auto& sp : rows.trackSpans())
+    {
+        if (sp.track < 0 || sp.track >= (int) tracks.size()) continue;
+        const auto& t = tracks[(size_t) sp.track];
+        const auto col = trackColour (t.colour);
+        const float y = (float) (sp.y + off), h = (float) sp.h;
+        if (y > (float) getHeight() || y + h < 0.0f) continue;
+        juce::Path p;
+        if (session.trackActive() && t.id == session.selected)
+        {
+            p.addRoundedRectangle (0.0f, y, w, h, 4.0f, 4.0f, true, false, true, false);
+            g.setColour (col);
+            g.fillPath (p);
+            continue;
+        }
+        const bool hot = sp.track == hover;
+        if (hot)
+        {
+            p.addRoundedRectangle (0.0f, y, w, h, 4.0f, 4.0f, true, false, true, false);
+            g.setColour (C::cellB);
+            g.fillPath (p);
+        }
+        const float bw = hot ? 8.0f : 4.0f;
+        juce::Path bar;
+        bar.addRoundedRectangle (w - bw, y, bw, h, 2.0f, 2.0f, true, false, true, false);
+        g.setColour (hot ? col : col.withAlpha (0.45f));
+        g.fillPath (bar);
+    }
+}
+
+void TrackTabs::setHover (int track)
+{
+    if (hover == track) return;
+    hover = track;
+    rows.setTabHover (track);
+    setMouseCursor (track >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    repaint();
+}
+
+void TrackTabs::mouseMove (const juce::MouseEvent& e) { setHover (trackAt (e.y)); }
+void TrackTabs::mouseExit (const juce::MouseEvent&) { setHover (-1); }
+
+void TrackTabs::mouseUp (const juce::MouseEvent& e)
+{
+    if (! e.mouseWasClicked() || e.mods.isPopupMenu()) return;
+    const int ti = trackAt (e.y);
+    if (ti < 0 || ti >= (int) session.doc.tracks.size()) return;
+    session.selectTrack (session.doc.tracks[(size_t) ti].id);
+}
+
+void TrackTabs::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    viewport.mouseWheelMove (e.getEventRelativeTo (&viewport), w);
+    setHover (trackAt (getMouseXYRelative().y));
+}
+
+juce::String TrackTabs::getTooltip()
+{
+    const int ti = trackAt (getMouseXYRelative().y);
+    if (ti < 0 || ti >= (int) session.doc.tracks.size()) return {};
+    const auto& t = session.doc.tracks[(size_t) ti];
+    const bool open = session.trackActive() && t.id == session.selected;
+    return t.name + juce::String::fromUTF8 (open ? " \xc2\xb7 click to close" : " \xc2\xb7 click to open");
+}
+
+//==============================================================================
 GridSection::GridSection (Session& s, UiHost& h) : session (s), swing (s), rows (s, h)
 {
     zoom.items = { "1 bar", "2 bars", "3 bars", "4 bars" };
@@ -1098,7 +1205,9 @@ GridSection::GridSection (Session& s, UiHost& h) : session (s), swing (s), rows 
     viewport.setViewedComponent (&rows, false);
     viewport.setScrollBarsShown (true, false);
     viewport.setScrollBarThickness (8);
+    viewport.onScroll = [this] { tabs.repaint(); };
     addAndMakeVisible (viewport);
+    addAndMakeVisible (tabs);
 }
 
 void GridSection::refresh()
@@ -1107,6 +1216,7 @@ void GridSection::refresh()
     zoom.repaint();
     swing.repaint();
     ruler.repaint();
+    tabs.repaint();
     repaint();
 }
 
@@ -1121,6 +1231,9 @@ void GridSection::resized()
     r.removeFromTop (6);
     auto rulerRow = r.removeFromTop (22);
     r.removeFromTop (6);
+    r.setRight (getWidth());   // the tabs go right up to the side panel
+    tabs.setBounds (r.removeFromRight (TrackTabs::kWidth));
+    r.removeFromRight (2);
     viewport.setBounds (r);
     const int w = viewport.getMaximumVisibleWidth();
     rows.setSize (w, 10);
