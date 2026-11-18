@@ -34,6 +34,7 @@ private:
 };
 
 class WaveView : public juce::Component,
+                 public juce::SettableTooltipClient,
                  public juce::DragAndDropTarget,
                  public juce::FileDragAndDropTarget
 {
@@ -43,6 +44,16 @@ public:
     bool editing = false;
     int selectedSlice = -1;
     static constexpr int kTicksH = 16;
+    static constexpr int kOverviewH = 8;   // under the ruler in the slice editor: which part of the sample is shown
+
+    // Zoom works in the slice editor only; outside it the whole sample is shown
+    void resetZoom();
+    void zoomToBar();                                // the bar under the middle of the view
+    void zoomAround (float x, double factor);        // factor > 1 zooms in; the point under x stays put
+    bool isZoomed() const { return editing && viewLen < 0.9999; }
+    double visibleStart() const { return viewStart; }   // fractions of the timeline under the ruler
+    double visibleLength() const { return viewLen; }
+    float xOfSampleFrac (double frac) const { return geometry().xOf (frac); }
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -50,6 +61,9 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void mouseMagnify (const juce::MouseEvent&, float scaleFactor) override;
 
     bool isInterestedInDragSource (const SourceDetails&) override;
     void itemDragEnter (const SourceDetails&) override { hot = true; repaint(); }
@@ -61,21 +75,37 @@ public:
     void filesDropped (const juce::StringArray&, int, int) override;
 
 private:
+    // The timeline under the ruler is `span` bars long (at least one); the sample takes `bars` of it.
+    // v0 / vl: the visible part of the timeline, fractions of span.
     struct Geo
     {
-        float w = 0, h = 0, areaW = 0, span = 1, bars = 0, lenS = 0;
-        float xOf (double frac) const { return (float) frac * areaW; }
+        float w = 0, h = 0, span = 1, bars = 0, lenS = 0;
+        double v0 = 0.0, vl = 1.0;
+        double tOf (double frac) const { return span > 0 ? frac * bars / span : 0.0; }       // sample -> timeline
+        double fracOfT (double t) const { return bars > 0 ? t * span / bars : 0.0; }         // timeline -> sample
+        float xOfT (double t) const { return (float) ((t - v0) / vl * w); }
+        float xOf (double frac) const { return xOfT (tOf (frac)); }
+        double tAt (float x) const { return w > 0 ? v0 + x / w * vl : 0.0; }
+        double fracAtUnclamped (float x) const { return fracOfT (tAt (x)); }
     };
     Geo geometry() const;
     int markerAt (float x) const;
     double fracAt (float x) const;
     int sliceAt (float x) const;       // slice under x in Slices mode, -1 otherwise
+    double minViewLength() const;      // the deepest zoom: half a sample per pixel
+    void clampView();
+    bool overOverview (juce::Point<float> p) const;
+    void setView (double start, double length);
 
     Session& session;
     bool hot = false;
     int dragMarker = -1;
     int pressSlice = -1;              // a slice pressed outside the editor: dragging it takes it to the grid
     bool draggingSlice = false;
+    double viewStart = 0.0, viewLen = 1.0;
+    enum class ViewDrag { none, pan, thumb } viewDrag = ViewDrag::none;
+    double viewDragStart = 0.0;
+    bool hoverOverview = false;
 };
 
 class SoundPanel : public juce::Component
@@ -107,7 +137,7 @@ private:
     Session& session;
     UiHost& host;
 
-    Btn close, editBtn;
+    Btn close, editBtn, zoomAll, zoomBar;
     Seg tabs, chop;
     ValueBox sens, parts;
     WaveView wave;
@@ -118,6 +148,7 @@ private:
     std::vector<Btn*> pills;
     juce::String builtKey;
     uint32_t shownTrack = 0;
+    juce::String shownSample;
 };
 
 } // namespace ok::ui

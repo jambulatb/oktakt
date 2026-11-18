@@ -102,7 +102,12 @@ WaveView::Geo WaveView::geometry() const
 {
     Geo g;
     g.w = (float) getWidth();
-    g.h = (float) getHeight() - 4.0f - kTicksH;
+    g.h = (float) getHeight() - 4.0f - kTicksH - (editing ? kOverviewH : 0);
+    if (editing)
+    {
+        g.v0 = viewStart;
+        g.vl = viewLen;
+    }
     auto* t = const_cast<Session&> (session).selectedTrack();
     if (t == nullptr) return g;
     auto s = session.samples.getCached (t->samplePath);
@@ -111,14 +116,81 @@ WaveView::Geo WaveView::geometry() const
     double bpm = session.isPlugin ? session.engine.currentBpm.load() : session.bpm();
     g.bars = (float) (g.lenS * bpm / 240.0);
     g.span = juce::jmax (1.0f, g.bars);
-    g.areaW = g.w * g.bars / g.span;
     return g;
 }
 
 double WaveView::fracAt (float x) const
 {
-    auto g = geometry();
-    return g.areaW > 0 ? juce::jlimit (0.0, 1.0, (double) (x / g.areaW)) : 0.0;
+    return juce::jlimit (0.0, 1.0, geometry().fracAtUnclamped (x));
+}
+
+//==============================================================================
+double WaveView::minViewLength() const
+{
+    const auto g = geometry();
+    auto* t = const_cast<Session&> (session).selectedTrack();
+    auto s = t != nullptr ? session.samples.getCached (t->samplePath) : nullptr;
+    if (s == nullptr || s->length() < 2 || g.w <= 0.0f || g.bars <= 0.0f) return 1.0;
+    // the visible samples (viewLen * span / bars * length) over the width: at least half a sample per pixel
+    return juce::jlimit (1.0e-9, 1.0, 0.5 * g.w * g.bars / (g.span * (double) s->length()));
+}
+
+void WaveView::clampView()
+{
+    viewLen = juce::jlimit (minViewLength(), 1.0, viewLen);
+    viewStart = juce::jlimit (0.0, 1.0 - viewLen, viewStart);
+}
+
+void WaveView::setView (double start, double length)
+{
+    viewStart = start;
+    viewLen = length;
+    clampView();
+    repaint();
+}
+
+void WaveView::resetZoom()
+{
+    viewDrag = ViewDrag::none;
+    if (viewStart == 0.0 && viewLen == 1.0) return;
+    viewStart = 0.0;
+    viewLen = 1.0;
+    repaint();
+}
+
+void WaveView::zoomToBar()
+{
+    if (! editing) return;
+    const auto g = geometry();
+    const int bar = isZoomed() ? (int) std::floor ((viewStart + viewLen * 0.5) * g.span) : 0;
+    setView (bar / (double) g.span, 1.0 / g.span);
+}
+
+void WaveView::zoomAround (float x, double factor)
+{
+    if (! editing || factor <= 0.0) return;
+    const auto g = geometry();
+    if (g.w <= 0.0f) return;
+    const double t = g.tAt (x);
+    viewLen = juce::jlimit (minViewLength(), 1.0, viewLen / factor);
+    viewStart = t - x / g.w * viewLen;
+    clampView();
+    repaint();
+}
+
+bool WaveView::overOverview (juce::Point<float> p) const
+{
+    return isZoomed() && p.y >= (float) (getHeight() - kOverviewH - 4);
+}
+
+// Ruler labels: bars, "bar.beat", "bar.beat.sixteenth" (the first sixteenth of a beat is left out)
+static juce::String rulerLabel (int q, int perBar)
+{
+    const int bar = q / perBar + 1, rem = q % perBar;
+    if (perBar == 1 || rem == 0) return juce::String (bar);
+    if (perBar == 4) return juce::String (bar) + "." + juce::String (rem + 1);
+    const int beat = rem / 4 + 1, six = rem % 4 + 1;
+    return juce::String (bar) + "." + juce::String (beat) + (six == 1 ? juce::String() : "." + juce::String (six));
 }
 
 int WaveView::markerAt (float x) const
@@ -165,20 +237,26 @@ void WaveView::paint (juce::Graphics& g)
         g.setColour (C::wave);
         g.fillRect (box);
 
-        // beat and bar lines
-        for (int qb = 1; qb < (int) std::ceil (geo.span * 4.0f - 0.01f); ++qb)
+        // beat and bar lines, and sixteenths when zoomed in far enough
         {
-            float x = qb / 4.0f / geo.span * geo.w;
-            g.setColour (qb % 4 == 0 ? C::knobTrack : juce::Colour (0xff1C1D21));
-            g.fillRect (x, 0.0f, 1.0f, geo.h);
+            const double pxPerBeat = geo.w / (geo.vl * geo.span * 4.0);
+            const int sub = pxPerBeat > 160.0 ? 4 : 1;
+            const double per = geo.span * 4.0 * sub;
+            const int q1 = (int) std::ceil ((geo.v0 + geo.vl) * per - 0.01);
+            for (int q = juce::jmax (1, (int) std::floor (geo.v0 * per)); q < q1; ++q)
+            {
+                g.setColour (q % (4 * sub) == 0 ? C::knobTrack : q % sub == 0 ? juce::Colour (0xff1C1D21) : juce::Colour (0xff17181B));
+                g.fillRect (std::round (geo.xOfT (q / per)), 0.0f, 1.0f, geo.h);
+            }
         }
-        if (geo.areaW < geo.w - 1.0f)
+        const float endX = geo.xOf (1.0);   // where the sample ends
+        if (endX < geo.w - 1.0f)
         {
             g.setColour (juce::Colours::white.withAlpha (0.02f));
-            g.fillRect (0.0f, 0.0f, geo.areaW, geo.h);
+            g.fillRect (0.0f, 0.0f, endX, geo.h);
             juce::Path edge;
-            edge.startNewSubPath (geo.areaW, 0);
-            edge.lineTo (geo.areaW, geo.h);
+            edge.startNewSubPath (endX, 0);
+            edge.lineTo (endX, geo.h);
             juce::Path dashed;
             const float dashes[] = { 4.0f, 3.0f };
             juce::PathStrokeType (1.0f).createDashedStroke (dashed, edge, dashes, 2);
@@ -223,20 +301,76 @@ void WaveView::paint (juce::Graphics& g)
         };
 
         // waveform
-        if (sample != nullptr && geo.areaW > 1.0f)
+        if (sample != nullptr && sample->length() > 1 && geo.w > 1.0f && geo.bars > 0.0f)
         {
             const auto& pk = sample->peaks;
-            const int cols = (int) geo.areaW;
+            const int len = sample->length();
+            const float* l = sample->buffer.getReadPointer (0);
+            const float* rr = sample->buffer.getReadPointer (1);
+            const float norm = 1.0f / sample->peakMax;
             const float cy = geo.h * 0.5f, amp = geo.h * 0.45f;
-            g.setColour (col.withAlpha (0.8f));
-            for (int x = 0; x < cols; x += 2)
+            const double samplesPerPx = geo.vl * geo.span / geo.bars * len / geo.w;
+
+            if (samplesPerPx < 1.5)
             {
-                size_t a = (size_t) ((double) x / geo.areaW * pk.size());
-                size_t b = juce::jmax (a + 1, (size_t) ((double) (x + 2) / geo.areaW * pk.size()));
-                float p = 0.0f;
-                for (size_t k = a; k < juce::jmin (b, pk.size()); ++k) p = juce::jmax (p, pk[k]);
-                float hh = juce::jmax (0.6f, p * amp * fadeGain ((x + 1.0) / geo.areaW));
-                g.fillRect ((float) x, cy - hh, 1.4f, hh * 2.0f);
+                // Zoomed in to single samples: the wave itself as a line, dots on the samples
+                g.setColour (C::knobTrack);
+                g.fillRect (0.0f, std::round (cy), geo.w, 1.0f);
+                auto valueAt = [&] (double pos)
+                {
+                    const int i = juce::jlimit (0, len - 1, (int) pos), j = juce::jmin (i + 1, len - 1);
+                    const float fr = (float) (pos - i);
+                    return ((l[i] + rr[i]) * (1.0f - fr) + (l[j] + rr[j]) * fr) * 0.5f * norm;
+                };
+                juce::Path line;
+                bool started = false;
+                for (int x = 0; x <= (int) geo.w; ++x)
+                {
+                    const double pos = geo.fracAtUnclamped ((float) x) * len;
+                    if (pos < 0.0 || pos > len - 1) continue;
+                    const float y = cy - valueAt (pos) * amp * fadeGain (pos / len);
+                    if (! started) line.startNewSubPath ((float) x, y);
+                    else line.lineTo ((float) x, y);
+                    started = true;
+                }
+                g.setColour (col.withAlpha (0.9f));
+                g.strokePath (line, juce::PathStrokeType (1.4f));
+                if (samplesPerPx < 0.8)
+                {
+                    g.setColour (C::text);
+                    const int i0 = juce::jmax (0, (int) std::floor (geo.fracAtUnclamped (0.0f) * len));
+                    const int i1 = juce::jmin (len - 1, (int) std::ceil (geo.fracAtUnclamped (geo.w) * len));
+                    for (int i = i0; i <= i1; ++i)
+                        g.fillEllipse (geo.xOf ((double) i / len) - 1.8f, cy - valueAt (i) * amp * fadeGain ((double) i / len) - 1.8f, 3.6f, 3.6f);
+                }
+            }
+            else
+            {
+                g.setColour (col.withAlpha (0.8f));
+                for (int x = 0; x < (int) geo.w; x += 2)
+                {
+                    const double fa = geo.fracAtUnclamped ((float) x), fb = geo.fracAtUnclamped ((float) (x + 2));
+                    if (fa >= 1.0) break;
+                    if (fb <= 0.0) continue;
+                    float p = 0.0f;
+                    if ((fb - fa) * (double) pk.size() >= 1.0)
+                    {
+                        // the stored peaks are fine enough
+                        size_t a = (size_t) juce::jmax (0.0, fa * pk.size());
+                        size_t b = juce::jmax (a + 1, (size_t) (fb * pk.size()));
+                        for (size_t k = a; k < juce::jmin (b, pk.size()); ++k) p = juce::jmax (p, pk[k]);
+                    }
+                    else
+                    {
+                        // closer than the stored peaks: read the samples under these two pixels
+                        const int a = juce::jmax (0, (int) (fa * len));
+                        const int b = juce::jmin (len, juce::jmax (a + 1, (int) std::ceil (fb * len)));
+                        for (int i = a; i < b; ++i) p = juce::jmax (p, std::abs (l[i]), std::abs (rr[i]));
+                        p *= norm;
+                    }
+                    float hh = juce::jmax (0.6f, p * amp * fadeGain ((fa + fb) * 0.5));
+                    g.fillRect ((float) x, cy - hh, 1.4f, hh * 2.0f);
+                }
             }
         }
 
@@ -245,11 +379,11 @@ void WaveView::paint (juce::Graphics& g)
         if (! slices)
         {
             if (s.regionStart > 0.0) g.fillRect (0.0f, 0.0f, geo.xOf (s.regionStart), geo.h);
-            if (s.regionEnd < 1.0) g.fillRect (geo.xOf (s.regionEnd), 0.0f, geo.areaW - geo.xOf (s.regionEnd), geo.h);
+            if (s.regionEnd < 1.0) g.fillRect (geo.xOf (s.regionEnd), 0.0f, endX - geo.xOf (s.regionEnd), geo.h);
         }
         juce::Path env;
         const float top = 8.0f, bottom = geo.h - 4.0f;
-        const float pps = geo.lenS > 0 ? geo.areaW / geo.lenS : 0.0f;
+        const float pps = geo.lenS > 0 ? (endX - geo.xOf (0.0)) / geo.lenS : 0.0f;
         auto secs = [] (int k) { return k == 0 ? 0.0001f : dsp::knobToSeconds (k); };
         for (auto& [a, b] : regions)
         {
@@ -321,14 +455,17 @@ void WaveView::paint (juce::Graphics& g)
                 g.setFont (mono (11.0f, 600));
                 g.drawText (txt, juce::Rectangle<float> (x, 0, w, 16), juce::Justification::centred, false);
             };
+            // Zoomed in, the slice under the left edge keeps its number there
+            const int first = isZoomed() ? sliceAt (0.0f) : 0;
             for (int i = 1; i < (int) s.slices.size(); ++i)
             {
                 float x = geo.xOf (s.slices[(size_t) i].start);
+                if (x < -40.0f || x > geo.w + 2.0f) continue;
                 g.setColour (C::text.withAlpha (0.8f));
                 g.fillRect (x - 1.0f, 0.0f, 2.0f, geo.h);
-                tab (x, i + 1, selectedSlice == i);
+                if (i != first) tab (x, i + 1, selectedSlice == i);
             }
-            tab (0.0f, 1, selectedSlice == 0);
+            tab (juce::jmax (0.0f, geo.xOf (s.slices[(size_t) first].start)), first + 1, selectedSlice == first);
         }
 
         if (t->missing)
@@ -360,21 +497,42 @@ void WaveView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (box.reduced (1.0f), 6.0f, 2.0f);
     }
 
-    // bar ruler and length hint
+    // bar ruler (beats and sixteenths too when zoomed in) and length hint
     auto ticks = juce::Rectangle<float> (0, geo.h + 4, geo.w, (float) kTicksH);
-    for (int b = 0; b < (int) std::ceil (geo.span - 0.01f); ++b)
     {
-        float x = b / geo.span * geo.w;
-        g.setColour (C::dim);
-        g.fillRect (x, ticks.getY(), 1.0f, ticks.getHeight());
-        g.setColour (C::text);
+        const double pxPerBeat = geo.w / (geo.vl * geo.span * 4.0);
+        const int perBar = ! isZoomed() ? 1 : pxPerBeat / 4.0 > 44.0 ? 16 : pxPerBeat > 34.0 ? 4 : 1;
+        const double per = geo.span * perBar;
+        const int q1 = (int) std::ceil ((geo.v0 + geo.vl) * per - 0.01);
         g.setFont (mono (11.0f));
-        g.drawText (juce::String (b + 1), juce::Rectangle<float> (x + 4, ticks.getY(), 30, ticks.getHeight()), juce::Justification::centredLeft, false);
+        for (int q = (int) std::floor (geo.v0 * per + 1.0e-9); q < q1; ++q)
+        {
+            const float x = std::round (geo.xOfT (q / per));
+            const bool isBar = q % perBar == 0;
+            g.setColour (C::dim);
+            if (isBar) g.fillRect (x, ticks.getY(), 1.0f, ticks.getHeight());
+            else g.fillRect (x, ticks.getBottom() - 6.0f, 1.0f, 6.0f);
+            g.setColour (isBar ? C::text : C::muted);
+            g.drawText (rulerLabel (q, perBar), juce::Rectangle<float> (x + 4, ticks.getY(), 60, ticks.getHeight()), juce::Justification::centredLeft, false);
+        }
     }
     double secs = sample != nullptr ? sample->seconds() : 0.0;
     double bpm = session.isPlugin ? session.engine.currentBpm.load() : session.bpm();
     juce::String hint;
-    if (s.stretch == 100) hint = "Original length " + juce::String (secs, 2) + " s";
+    if (isZoomed())
+    {
+        // the visible part: from and to (bar.beat.sixteenth), and how long it is
+        auto at = [&] (double tl)
+        {
+            const int q = (int) std::floor (tl * geo.span * 16.0 + 1.0e-6);
+            return juce::String (q / 16 + 1) + "." + juce::String (q % 16 / 4 + 1) + "." + juce::String (q % 4 + 1);
+        };
+        const double ms = geo.vl * geo.span / juce::jmax (1.0e-9f, geo.bars) * geo.lenS * 1000.0;
+        const auto from = at (geo.v0), to = at (geo.v0 + geo.vl);
+        hint = (from == to ? from : from + juce::String::fromUTF8 (" \xe2\x80\x93 ") + to)
+             + juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (ms, ms < 100.0 ? 1 : 0) + " ms";
+    }
+    else if (s.stretch == 100) hint = "Original length " + juce::String (secs, 2) + " s";
     else
     {
         hint = "Length " + juce::String (secs, 2) + juce::String::fromUTF8 (" \xe2\x86\x92 ") + juce::String (geo.lenS, 2) + " s";
@@ -385,10 +543,13 @@ void WaveView::paint (juce::Graphics& g)
         }
         else hint += juce::String::fromUTF8 (" \xc2\xb7 pitch kept");
     }
-    hint += juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (geo.bars, 2) + " bars at " + juce::String (bpm, 1) + " BPM";
-    if (s.amp == AmpMode::OneShot && (s.fadeIn > 0 || s.fadeOut > 0)) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = In / Out");
-    if (s.amp == AmpMode::AHD) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = amp envelope");
-    if (s.amp == AmpMode::ADSR) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = amp envelope (note held for 1 beat)");
+    if (! isZoomed())
+    {
+        hint += juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (geo.bars, 2) + " bars at " + juce::String (bpm, 1) + " BPM";
+        if (s.amp == AmpMode::OneShot && (s.fadeIn > 0 || s.fadeOut > 0)) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = In / Out");
+        if (s.amp == AmpMode::AHD) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = amp envelope");
+        if (s.amp == AmpMode::ADSR) hint += juce::String::fromUTF8 (" \xc2\xb7 dashed line = amp envelope (note held for 1 beat)");
+    }
     auto hf = sans (11.0f);
     float hw = juce::jmin (ticks.getWidth(), (float) juce::GlyphArrangement::getStringWidthInt (hf, hint) + 12.0f);
     auto hr = ticks.withLeft (ticks.getRight() - hw);
@@ -397,21 +558,61 @@ void WaveView::paint (juce::Graphics& g)
     g.setColour (C::muted);
     g.setFont (hf);
     g.drawText (hint, hr, juce::Justification::centredRight, true);
+
+    // which part of the sample is shown: a strip under the ruler, its thumb can be dragged
+    if (isZoomed())
+    {
+        const float y = (float) (getHeight() - kOverviewH + 1);
+        g.setColour (juce::Colour (0xff1C1D21));
+        g.fillRoundedRectangle (0.0f, y + 1.0f, geo.w, 4.0f, 2.0f);
+        const float tw = juce::jmax (8.0f, (float) viewLen * geo.w);
+        const float tx = juce::jmin ((float) viewStart * geo.w, geo.w - tw);
+        g.setColour (viewDrag == ViewDrag::thumb || hoverOverview ? C::muted : C::dim);
+        g.fillRoundedRectangle (tx, y, tw, 6.0f, 3.0f);
+    }
 }
 
 void WaveView::mouseMove (const juce::MouseEvent& e)
 {
+    const bool ov = overOverview (e.position);
+    if (ov != hoverOverview) { hoverOverview = ov; repaint(); }
     auto cursor = juce::MouseCursor::NormalCursor;
-    if (editing && markerAt (e.position.x) > 0) cursor = juce::MouseCursor::LeftRightResizeCursor;
+    if (ov) cursor = juce::MouseCursor::DraggingHandCursor;
+    else if (editing && markerAt (e.position.x) > 0) cursor = juce::MouseCursor::LeftRightResizeCursor;
     else if (! editing && selectedSlice >= 0 && e.position.y < geometry().h && sliceAt (e.position.x) == selectedSlice)
         cursor = juce::MouseCursor::DraggingHandCursor;
     setMouseCursor (cursor);
+}
+
+void WaveView::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverOverview) { hoverOverview = false; repaint(); }
 }
 
 void WaveView::mouseDown (const juce::MouseEvent& e)
 {
     dragMarker = -1;
     draggingSlice = false;
+    viewDrag = ViewDrag::none;
+
+    // Zoomed in: the strip under the ruler and the middle button move the view
+    if (isZoomed() && (e.mods.isMiddleButtonDown() || overOverview (e.position)))
+    {
+        pressSlice = -1;
+        if (! e.mods.isMiddleButtonDown())
+        {
+            const float w = (float) getWidth();
+            if (e.position.x < viewStart * w || e.position.x > (viewStart + viewLen) * w)
+            {
+                viewStart = e.position.x / w - viewLen * 0.5;   // a click beside the thumb centres it there
+                clampView();
+            }
+        }
+        viewDrag = e.mods.isMiddleButtonDown() ? ViewDrag::pan : ViewDrag::thumb;
+        viewDragStart = viewStart;
+        repaint();
+        return;
+    }
     pressSlice = (! editing && e.position.y < geometry().h) ? sliceAt (e.position.x) : -1;
     auto* t = session.selectedTrack();
     if (t == nullptr || ! editing) return;
@@ -425,6 +626,15 @@ void WaveView::mouseDown (const juce::MouseEvent& e)
 
 void WaveView::mouseDrag (const juce::MouseEvent& e)
 {
+    if (viewDrag != ViewDrag::none)
+    {
+        const double dx = getWidth() > 0 ? e.getDistanceFromDragStartX() / (double) getWidth() : 0.0;
+        viewStart = viewDrag == ViewDrag::thumb ? viewDragStart + dx : viewDragStart - dx * viewLen;
+        clampView();
+        repaint();
+        return;
+    }
+
     auto* t = session.selectedTrack();
     if (t == nullptr) return;
 
@@ -462,7 +672,8 @@ void WaveView::mouseDrag (const juce::MouseEvent& e)
 void WaveView::mouseUp (const juce::MouseEvent& e)
 {
     auto* t = session.selectedTrack();
-    bool dragged = dragMarker > 0 || draggingSlice;
+    bool dragged = dragMarker > 0 || draggingSlice || viewDrag != ViewDrag::none;
+    if (viewDrag != ViewDrag::none) { viewDrag = ViewDrag::none; repaint(); }
     dragMarker = -1;
     draggingSlice = false;
     pressSlice = -1;
@@ -486,8 +697,38 @@ void WaveView::mouseDoubleClick (const juce::MouseEvent& e)
 {
     auto* t = session.selectedTrack();
     if (t == nullptr || ! editing || t->sound.play != PlayMode::Slices) return;
+    if (e.position.y > geometry().h) { resetZoom(); return; }   // on the ruler: the whole sample
     if (markerAt (e.position.x) > 0) return;
     session.addMarker (t->id, fracAt (e.position.x));
+}
+
+void WaveView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (! editing)
+    {
+        Component::mouseWheelMove (e, w);
+        return;
+    }
+    const float sign = w.isReversed ? -1.0f : 1.0f;
+    if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+    {
+        zoomAround (e.position.x, std::pow (2.0, w.deltaY * sign * 4.0));   // about 1.5x per wheel notch
+        return;
+    }
+    if (! isZoomed())
+    {
+        Component::mouseWheelMove (e, w);
+        return;
+    }
+    const float d = std::abs (w.deltaX) > std::abs (w.deltaY) ? w.deltaX : w.deltaY;
+    viewStart -= d * sign * viewLen * 0.5;
+    clampView();
+    repaint();
+}
+
+void WaveView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
+{
+    if (editing) zoomAround (e.position.x, scaleFactor);
 }
 
 bool WaveView::isInterestedInDragSource (const SourceDetails& d)
@@ -549,8 +790,20 @@ SoundPanel::SoundPanel (Session& s, UiHost& h) : session (s), host (h), wave (s)
 
     editBtn.padX = 14;
     editBtn.radius = 6.0f;
-    editBtn.onClick = [this] { wave.editing = ! wave.editing; refresh(); };
+    editBtn.onClick = [this] { wave.editing = ! wave.editing; wave.resetZoom(); refresh(); };
     addChildComponent (editBtn);
+
+    // Zoom in the slice editor
+    zoomAll.text = "Sample";
+    zoomAll.radius = 6.0f;
+    zoomAll.onClick = [this] { wave.resetZoom(); };
+    zoomAll.setTooltip ("Show the whole sample. Double-clicking the ruler does the same");
+    addChildComponent (zoomAll);
+    zoomBar.text = "Bar";
+    zoomBar.radius = 6.0f;
+    zoomBar.onClick = [this] { wave.zoomToBar(); };
+    zoomBar.setTooltip ("Zoom to one bar: the first one, or the one in the middle of the view");
+    addChildComponent (zoomBar);
 
     chop.items = { "By hits", "Equal parts", "Manual" };
     chop.padX = 11;
@@ -611,6 +864,17 @@ void SoundPanel::refresh()
     const bool slices = t->sound.play == PlayMode::Slices;
     if (! slices) wave.editing = false;
     const bool editing = wave.editing;
+    if (! editing || t->samplePath != shownSample) wave.resetZoom();   // zoom lives in the slice editor only
+    shownSample = t->samplePath;
+    zoomAll.setVisible (editing);
+    zoomBar.setVisible (editing);
+#if JUCE_MAC
+    const juce::String zoomKey = "Cmd";
+#else
+    const juce::String zoomKey = "Ctrl";
+#endif
+    wave.setTooltip (editing ? zoomKey + juce::String::fromUTF8 ("+scroll or pinch to zoom \xc2\xb7 scroll to move along \xc2\xb7 double-click the ruler to see the whole sample")
+                             : juce::String());
 
     editBtn.setVisible (slices);
     editBtn.text = editing ? "Done" : "Edit slices";
@@ -648,7 +912,7 @@ void SoundPanel::resized()
     head.removeFromLeft (14);
     infoArea = slices ? head.removeFromLeft (100) : juce::Rectangle<int>();
 
-    wave.setBounds (r.removeFromTop ((wave.editing ? 158 : 90) + 4 + WaveView::kTicksH));
+    wave.setBounds (r.removeFromTop ((wave.editing ? 158 + WaveView::kOverviewH : 90) + 4 + WaveView::kTicksH));
     {
         const int bw = editBtn.idealWidth (14);
         editBtn.setBounds (wave.getRight() - 6 - bw, wave.getY() + 20, bw, 24);   // under the slice number tabs
@@ -662,6 +926,13 @@ void SoundPanel::resized()
         row.removeFromLeft (12);
         chop.setBounds (row.removeFromLeft (chop.idealWidth()).withSizeKeepingCentre (chop.idealWidth(), 32));
         row.removeFromLeft (12);
+        {
+            const int wb = zoomBar.idealWidth (12), wa = zoomAll.idealWidth (12);
+            zoomBar.setBounds (row.removeFromRight (wb).withSizeKeepingCentre (wb, 26));
+            row.removeFromRight (6);
+            zoomAll.setBounds (row.removeFromRight (wa).withSizeKeepingCentre (wa, 26));
+            row.removeFromRight (12);
+        }
         sensLabel = partsLabel = hintArea = {};
         if (t && t->sound.chop == ChopMode::Transients)
         {

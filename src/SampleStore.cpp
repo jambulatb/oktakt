@@ -86,6 +86,7 @@ void SampleStore::analyse (SampleData& s)
     }
     if (maxPeak > 0.0f)
         for (auto& p : s.peaks) p /= maxPeak;
+    s.peakMax = maxPeak > 0.0f ? maxPeak : 1.0f;
 
     // Onsets: rise of pre-emphasised energy in ~5 ms frames
     const int hop = juce::jmax (64, (int) (s.sampleRate * 0.005));

@@ -21,7 +21,8 @@ struct SampleData : juce::ReferenceCountedObject
     bool isStereo = false;
     double sampleRate = 44100.0;
 
-    std::vector<float> peaks;          // max |x| per bin, kPeakBins bins
+    std::vector<float> peaks;          // max |x| per bin, kPeakBins bins, divided by peakMax
+    float peakMax = 1.0f;              // the largest |x| of the file: scales the wave drawn from the buffer itself
     std::vector<double> onsets;        // positions (fraction 0…1), sorted
     std::vector<float> onsetStrength;  // 0…1 for each onset
 

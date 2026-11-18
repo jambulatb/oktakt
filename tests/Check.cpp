@@ -7,6 +7,7 @@
 #include "ui/Editor.h"
 #include "ui/Widgets.h"
 #include "ui/GridView.h"
+#include "ui/SoundPanel.h"
 
 using namespace ok;
 
@@ -209,6 +210,11 @@ struct Runner : juce::Timer
         steps.push_back ([this] { sliceDragTest(); return true; });
         steps.push_back ([this] { return settle (4); });
         steps.push_back ([this] { snapshot ("ui_slice_editor.png"); return true; });
+        steps.push_back ([this] { zoomTest(); return true; });
+        steps.push_back ([this] { return settle (4); });
+        steps.push_back ([this] { snapshot ("ui_slice_zoom.png"); zoomToSamples(); return true; });
+        steps.push_back ([this] { return settle (4); });
+        steps.push_back ([this] { snapshot ("ui_slice_samples.png"); zoomResetTest(); return true; });
         steps.push_back ([this] { emptyPattern(); return true; });
         steps.push_back ([this] { return settle (4); });
         steps.push_back ([this] { snapshot ("ui_empty.png"); return true; });
@@ -965,6 +971,56 @@ struct Runner : juce::Timer
             return false;
         };
         check (! hasOld (*editor), "the slice editor has no Slices -> tracks / Export slices buttons");
+    }
+
+    ui::Btn* findButton (juce::Component& c, const juce::String& text)
+    {
+        if (auto* b = dynamic_cast<ui::Btn*> (&c); b != nullptr && b->text == text && b->isVisible()) return b;
+        for (auto* ch : c.getChildren()) if (auto* b = findButton (*ch, text)) return b;
+        return nullptr;
+    }
+
+    // Zoom in the slice editor (opened by sliceDragTest on the Break track)
+    void zoomTest()
+    {
+        auto* wv = findChild<ui::WaveView> (*editor);
+        check (wv != nullptr && wv->editing && ! wv->isZoomed(), "the slice editor opens on the whole sample");
+        if (wv == nullptr) return;
+        auto& br = track (4);
+        const double m = br.sound.slices[2].start;
+        const float x = wv->xOfSampleFrac (m);
+        wv->zoomAround (x, 8.0);
+        check (wv->isZoomed() && std::abs (wv->visibleLength() - 0.125) < 1.0e-9, "zoom in 8x");
+        check (std::abs (wv->xOfSampleFrac (m) - x) < 0.5f, "the point under the pointer stays where it was when zooming");
+        check (findButton (*editor, "Sample") != nullptr && findButton (*editor, "Bar") != nullptr, "Sample and Bar buttons in the slice editor");
+        if (auto* b = findButton (*editor, "Bar")) b->onClick();
+        const double barLen = wv->visibleLength();
+        check (barLen < 1.0 && wv->visibleStart() >= 0.0 && wv->visibleStart() + barLen <= 1.0 + 1.0e-9, "Bar shows one bar");
+        if (auto* b = findButton (*editor, "Sample")) b->onClick();
+        check (! wv->isZoomed(), "Sample shows the whole sample");
+        wv->zoomAround (x, 6.0);
+    }
+
+    void zoomToSamples()
+    {
+        if (auto* wv = findChild<ui::WaveView> (*editor))
+        {
+            const float x = wv->xOfSampleFrac (track (4).sound.slices[2].start);
+            wv->zoomAround (x + 6.0f, 1.0e9);   // clamped at half a sample per pixel
+            check (wv->isZoomed() && wv->visibleLength() > 0.0, "the deepest zoom stops at half a sample per pixel");
+        }
+    }
+
+    void zoomResetTest()
+    {
+        auto* wv = findChild<ui::WaveView> (*editor);
+        if (wv == nullptr) return;
+        if (auto* b = findButton (*editor, "Done")) b->onClick();
+        check (! wv->editing && wv->visibleLength() == 1.0 && wv->visibleStart() == 0.0, "leaving the slice editor shows the whole sample again");
+        wv->zoomAround (10.0f, 4.0);
+        check (wv->visibleLength() == 1.0, "no zoom outside the slice editor");
+        if (auto* b = findButton (*editor, "Edit slices")) b->onClick();
+        check (wv->editing && ! wv->isZoomed(), "the slice editor opens again on the whole sample");
     }
 
     void closeAsk (int)
