@@ -1,150 +1,85 @@
-# OKTAKT — первая версия
+# OKTAKT
 
-Сэмплер-секвенсор до 16 треков: у каждого трека своя сетка (группы × шаги), параметры на каждый удар, условия STEP, RANDOM и части A–D. Один код на JUCE 8 собирается в Standalone, VST3 и CLAP. Основа — спецификация «OKTAKT — спецификация первой версии» и макет «Концепт VST-сэмплера».
+A sample sequencer for building drum patterns. Runs as a standalone app or as a VST3 / CLAP plugin (plus Audio Unit on macOS) on Linux, Windows and macOS.
 
-## Готовая сборка для быстрого теста
+- Up to 16 tracks. Each track has its own grid, so straight, triplet and quintuplet tracks can play side by side.
+- Per-hit settings: velocity, timing offset, pitch, stretch, filter, drive and more.
+- Each pattern has four parts, A–D. Switch between them while it plays: now, at the end of the bar, or at the end of the part.
+- Variation on every pass: play conditions (for example every 2nd pass), chance, retrigger, and randomised hits and timing.
+- Slice loops by hits, into equal parts, or by hand, then drop slices onto the grid.
+- Time-stretch that keeps pitch, or repitch like a tape.
+- In the plugin, each track can go to its own output (Main or Out 2–16).
 
-В `dist/` лежат уже собранные бинарники (Ubuntu 26.04, x86-64):
+This is an early version (0.1).
+
+## Download
+
+Installers for Windows and macOS are on the [Releases](https://github.com/jambulatb/oktakt/releases) page. For Linux, build from source (see below).
+
+The installers are not signed, so the system warns you the first time:
+
+- **Windows:** SmartScreen shows a warning. Click *More info*, then *Run anyway*.
+- **macOS:** the installer is blocked. Go to *System Settings → Privacy & Security* and click *Open Anyway*.
+
+## Quick start
+
+1. Drag samples from the browser on the left onto the grid. Each sample becomes a track. The app opens on a demo kit; to use your own samples, click **Source…** and pick a folder.
+2. Click a cell to add a hit. Press **Space** to play or stop.
+3. Click a track name to open its settings: the rows of per-hit values, the panel on the right and the SOUND panel at the bottom.
+4. Set up audio under the gear icon → **Settings**. In a DAW, the tempo and transport come from the host.
+
+Patterns are saved to `Documents/OKTAKT/Patterns` (Ctrl+S).
+
+## Build from source
+
+The build script downloads the dependencies (JUCE 8, Signalsmith Stretch, clap-juce-extensions) into `external/`. The first build takes a few minutes.
+
+### Linux (Ubuntu)
 
 ```bash
-./dist/OKTAKT                                   # standalone
-cp -r dist/OKTAKT.vst3 ~/.vst3/                 # VST3 для Reaper / Bitwig
-mkdir -p ~/.clap && cp dist/OKTAKT.clap ~/.clap/  # CLAP
-```
-
-## Сборка на Ubuntu
-
-```bash
-sudo apt update
 sudo apt install build-essential cmake ninja-build pkg-config git libasound2-dev libjack-jackd2-dev \
      libfreetype-dev libfontconfig-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
      libxcomposite-dev libxext-dev
-
 ./scripts/build.sh
 ```
 
-Скрипт докачивает недостающие зависимости в `external/` (JUCE 8.0.9, Signalsmith Stretch, clap-juce-extensions), собирает всё в `build/` и копирует плагины в `~/.vst3` и `~/.clap`. Первая сборка занимает несколько минут.
+The script builds into `build/`, installs the plugins to `~/.vst3` and `~/.clap`, and adds OKTAKT to the app menu. Add `--no-install` to only build.
 
-- `./scripts/build.sh --no-install` — не копировать плагины и не добавлять OKTAKT в меню приложений.
-- `./scripts/install-desktop.sh [путь к OKTAKT]` — добавить OKTAKT в меню приложений с иконкой (`~/.local/share`, без sudo). GNOME на Wayland берёт иконку окна только из такого `.desktop`-файла (по `StartupWMClass=OKTAKT`), поэтому без него в доке и Alt+Tab видна стандартная иконка, даже при запуске из терминала. `build.sh` делает это сам.
-- `./scripts/build.sh --check` — дополнительно собрать и запустить офлайн-самопроверку (движок без звуковой карты, снимки интерфейса в `build/check-shots/`).
+### Windows
 
-## Сборка на Windows
+You need Visual Studio 2022 or newer (or its Build Tools) with *Desktop development with C++*, and CMake 3.24 or newer.
 
-Собирается компилятором Microsoft (MSVC). Из Linux кросс-собрать нельзя: JUCE 8 не поддерживает MinGW.
+- `scripts\build-windows.bat` builds the app and the plugins into `dist-windows\`.
+- `scripts\build-windows-installer.bat` also packs them into a `Setup.exe`. It needs [Inno Setup](https://jrsoftware.org/isdl.php) 6.5.2 or newer.
 
-1. Установите **Visual Studio 2022** или новее. Подойдут и бесплатные Build Tools. В установщике отметьте нагрузку «Разработка классических приложений на C++».
-2. Установите **CMake** 3.24 или новее с https://cmake.org/download/ и в установщике отметьте «Add CMake to the system PATH».
-3. Распакуйте папку проекта целиком, вместе с `external/` и `resources/`, например в `C:\dev\OKTAKT`. Путь лучше без кириллицы и пробелов.
-4. Запустите `scripts\build-windows.bat` двойным щелчком или из командной строки. Первая сборка идёт 10–20 минут.
+### macOS
 
-Результат появится в `dist-windows\`:
-
-- `OKTAKT.exe`: Standalone. Звук: шестерёнка → Settings → AUDIO, драйвер Windows Audio или DirectSound.
-- `OKTAKT.vst3`: скопируйте папку в `C:\Program Files\Common Files\VST3\` (нужны права администратора) и пересканируйте плагины в DAW.
-- `OKTAKT.clap`: в `C:\Program Files\Common Files\CLAP\`, для DAW с поддержкой CLAP.
-
-Среда выполнения C++ встроена в файлы, VC++ Redistributable ставить не нужно. ASIO не включён: для него нужен ASIO SDK от Steinberg.
-
-### Установщик для Windows
-
-`scripts\build-windows-installer.bat` собирает всё то же и упаковывает в один файл `dist-windows\OKTAKT-<версия>-Windows-Setup.exe`. Дополнительно нужен **Inno Setup** 6.5.2 или новее: https://jrsoftware.org/isdl.php.
-
-Без Windows его собирает GitHub: **Actions → Windows installer → Run workflow**, готовый `Setup.exe` появится в разделе **Artifacts** запуска (`.github/workflows/windows.yml`).
-
-В установщике галочками отмечается, что ставить:
-
-| Компонент | Куда ставится |
-|---|---|
-| OKTAKT app (Standalone) | `C:\Program Files\OKTAKT`, ярлык в меню «Пуск» |
-| VST3 | `C:\Program Files\Common Files\VST3\OKTAKT.vst3` |
-| CLAP | `C:\Program Files\Common Files\CLAP\OKTAKT.clap` |
-| Демо-набор | `C:\ProgramData\OKTAKT\Demo Kit`, Standalone открывает его при первом запуске |
-
-Если OKTAKT уже стоит, установщик обновляет его и предлагает те же галочки, что в прошлый раз. Удаление: **Параметры → Приложения → OKTAKT → Удалить**. Оно спрашивает, стереть ли и настройки приложения (по умолчанию нет); паттерны в `Документы\OKTAKT` не трогаются. Если приложение открыто, установщик и удаление просят сначала его закрыть.
-
-Установщик не подписан сертификатом, поэтому при первом запуске Windows SmartScreen покажет предупреждение: «Подробнее» → «Выполнить в любом случае».
-
-## Установщик для macOS
-
-Собирается на самом Mac: для macOS нужен компилятор Apple, из Linux её не собрать.
-
-1. Установите инструменты командной строки Xcode: `xcode-select --install` в Терминале. Полный Xcode не нужен.
-2. Установите **CMake** 3.24 или новее: `brew install cmake`, или с https://cmake.org/download/.
-3. Распакуйте папку проекта целиком, вместе с `external/` и `resources/`.
-4. В Терминале, в папке проекта: `bash scripts/build-macos.sh`. Первая сборка идёт 15–30 минут: она универсальная, для Apple Silicon и Intel. Только для Apple Silicon быстрее: `OKTAKT_ARCHS=arm64 bash scripts/build-macos.sh`.
-
-Результат: `dist-macos/OKTAKT-<версия>-macOS.pkg`. Установщик сразу открывает шаг «Тип установки → Настроить», где отмечается, что ставить:
-
-| Компонент | Куда ставится |
-|---|---|
-| OKTAKT app (Standalone) | `/Applications` |
-| VST3 | `/Library/Audio/Plug-Ins/VST3` |
-| Audio Unit (Logic, GarageBand) | `/Library/Audio/Plug-Ins/Components` |
-| CLAP | `/Library/Audio/Plug-Ins/CLAP` |
-| Демо-набор | `/Library/Application Support/OKTAKT/Demo Kit`, Standalone открывает его при первом запуске |
-
-Без аккаунта Apple Developer файлы подписываются ad-hoc. На том Mac, где собрано, установщик открывается сразу. На другом Mac система сначала его заблокирует: Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть». Чтобы раздавать установщик без этого, задайте `OKTAKT_SIGN_APP`, `OKTAKT_SIGN_PKG` и `OKTAKT_NOTARY_PROFILE` (подробности в начале скрипта): он подпишет Developer ID и отправит на нотаризацию.
-
-## Запуск
+You need the Xcode Command Line Tools (`xcode-select --install`) and CMake 3.24 or newer (`brew install cmake`).
 
 ```bash
-./build/OKTAKT_artefacts/Release/Standalone/OKTAKT
+bash scripts/build-macos.sh
 ```
 
-При первом запуске браузер слева открыт на демо-наборе `resources/demo-kit` (бочка, снейр, хэты, клэп, перкуссия, брейк, бас, пэд — синтезированы скриптом `scripts/make-demo-kit.py`). Свою папку выбирает кнопка **Source…**.
+This builds a disk image with an installer in `dist-macos/`. The build is universal (Apple Silicon and Intel). For Apple Silicon only, which is faster to build, run `OKTAKT_ARCHS=arm64 bash scripts/build-macos.sh`. To sign and notarize, see the comments at the top of the script.
 
-Звук: шестерёнка → **Settings** → AUDIO. Драйвер ALSA или JACK, устройство, частота, буфер; под ними — оценка задержки. При драйвере ALSA и работающем PipeWire/PulseAudio в списке устройств те же выходы, что в системных настройках звука, плюс **System default** (следует за выбором системы). Без звукового сервера там полный список устройств ALSA. Если звука нет, попробуйте System default или JACK. Какие выходы видит OKTAKT: `OKTAKT_Check --outputs -`.
+### Installers from GitHub Actions
 
-Состояние (паттерн, темп, громкость, папка сэмплов) сохраняется между запусками в `~/.config/OKTAKT/`. Библиотека паттернов — `~/Documents/OKTAKT/Patterns/*.oktakt` (JSON).
+You can also have GitHub build the installers: go to **Actions**, pick *Windows installer* or *macOS installer*, and click **Run workflow**. Pushing a tag like `v0.1.0` starts both. The files appear under the run's *Artifacts*.
 
-## Что проверить
+## Self-check
 
-1. Перетащите сэмплы из браузера на пустую область — появятся треки (до 16). Бросок на верх/низ строки вставляет новый трек, на середину — заменяет сэмпл.
-2. Клик по клетке ставит удар, **Shift**-клик отмечает его для STEP, **Alt**-клик закрепляет. Пробел — Play/Stop.
-3. Клик по имени трека раскрывает строки автоматизации, правую панель (GRID, RANDOM, STEP) и SOUND снизу. Повторный клик или крестик закрывает.
-4. GRID: группы 1–11, шаги 1–8 (4 × 3 — триоли, 1 × 5 — пятёрки). Swing над сеткой — перетаскивание или колесо.
-5. POSITION: Micro трека. STEP: Condition (цикл + отметки проходов), Chance, Retrig с длиной и Fade. RANDOM: Random и Accuracy.
-6. SOUND: вкладка Slices → **Edit slices** → By hits / Equal parts / Manual; колесо над ударом выбирает слайс; клик по волне выбирает и прослушивает слайс. В редакторе слайсов волну можно приблизить: Ctrl+колесо (на Mac Cmd+колесо) или щипок на тачпаде масштабирует вокруг курсора, колесо сдвигает, полоску под линейкой можно тянуть; кнопки Sample и Bar показывают весь сэмпл и один такт, двойной клик по линейке — весь сэмпл. При сильном приближении видны отдельные отсчёты. Выбранный слайс можно перетащить в сетку: на клетку своего трека — там встанет удар с этим слайсом; в любое другое место — появится новый трек, который играет только этот слайс.
-7. Части A–D: клик по пустой части создаёт новую пустую часть; во время игры выбранная часть встаёт в очередь (Now / Bar end / Part end); правый клик — Copy / Paste / Clear. Меню «⋯» над тактом копирует такт всех треков — вставить можно в любой такт любой части. Меню «⋯» трека копирует один такт или все такты трека — вставить можно в любой трек и любую часть.
-8. Паттерн: меню PATTERN (Save, Save as…, New, Load), Ctrl+S, Undo/Redo (Ctrl+Z / Ctrl+Shift+Z, 100 шагов), Delete, F2, Esc.
-9. Окно масштабируется от 75 до 150 % с сохранением пропорций.
-10. Плагин: в Reaper или Bitwig добавьте OKTAKT как инструмент. Темп и старт идут от DAW; у трека в правой панели блок OUTPUT (Main или Out 2…16).
+`./scripts/build.sh --check` also builds and runs an offline test. It needs no sound card. It renders the engine, checks timing and the sequencer features, and saves screenshots of the UI to `build/check-shots/`.
 
-## Структура
+## Project layout
 
 ```
-src/Model.*          данные паттерна, JSON
-src/SampleStore.*    загрузка WAV/AIFF/FLAC/MP3/OGG, пики волны, поиск ударов, растяжение (Signalsmith Stretch)
-src/Engine.*         аудиодвижок: планировщик ударов, STEP/RANDOM, части, голоса (до 128), фильтры, CHARACTER, метроном
-src/Session.*        действия пользователя, Undo/Redo, сохранение, передача снимков в аудиопоток
-src/PluginProcessor.* плагин: 16 стереовыходов, синхронизация с DAW, состояние
-src/StandaloneApp.cpp своё окно standalone
-src/ui/*             интерфейс по макету
-tests/Check.cpp      офлайн-самопроверка
+src/Model.*            pattern data, saved as JSON
+src/SampleStore.*      sample loading, waveform, hit detection, time-stretch
+src/Engine.*           audio engine: sequencer, voices, filters
+src/Session.*          editing, undo/redo, saving
+src/PluginProcessor.*  plugin: 16 stereo outputs, DAW sync
+src/ui/                user interface
+tests/Check.cpp        offline self-check
 ```
 
-## Где первая версия решает то, чего нет в спецификации
-
-- Параметры удара (строки под треком): Velocity, Micro, Random, Accuracy, Stretch, Pitch, Cutoff, Reso, Env amt, Drive, Bit red., SR red. Все задаются числами: перетаскивание вверх/вниз или колесо, двойной клик возвращает значение трека. В режиме ADSR нота держится одну долю.
-- Stretch удара в Keep pitch: растянутая копия считается в фоне, пока её нет — удар играет без растяжения; в Repitch меняет скорость (и высоту).
-- AMP → One-shot: In / Out — плавное нарастание от точки Start и затухание к концу, заданному Length, в % от звучащей части; в Slices — внутри каждого слайса. Видно на волне пунктиром и по форме волны.
-- STEP у трека один (Condition, Chance, Retrig, Retrig length, Fade). Если в части есть отмеченные удары трека — он действует только на них, если нет — на все. Отметки сохраняются в паттерне, отменяются через Undo и влияют на звук; Esc снимает отметки открытого трека.
-- POSITION → Micro (в правой панели под GRID): сдвигает все удары трека на ±23/24 шага. Как и остальные параметры, это значение трека: строка Micro задаёт удару своё значение вместо него. Так же Random и Accuracy из RANDOM — значения трека для строк Random и Accuracy. У закреплённого удара Random и Accuracy не действуют: их цифры в строках серые, но менять их можно.
-- Duplicate копирует звук и настройки трека без ударов, имя не меняется.
-- Вставка «All bars» трека в часть с меньшим числом тактов удлиняет часть до длины скопированной; удары получает только этот трек.
-- Micro: единица — 1/24 шага.
-- Random на каждом проходе убирает до половины ударов, добавляет удары в пустые клетки (не больше четверти, тише записанных) и меняет громкость оставшихся до ±50 %; закреплённые удары не трогает.
-- При смене GRID удары переезжают в ближайшую по времени клетку новой сетки.
-- Accuracy ниже 100 % сдвигает удары по времени (до ±½ шага) и меняет их громкость (до ±50 % при 0 %), заново на каждом проходе; закреплённые удары не трогает.
-- Крестик у строки автоматизации убирает строку вместе с её значениями.
-- Новая часть создаётся пустой, длиной 1 такт.
-- Keep pitch считается в фоне; пока растяжение не готово (доли секунды), играет нерастянутый сэмпл.
-- Текущий шаг во время воспроизведения обведён рамкой.
-- Закрытие standalone с несохранёнными изменениями спрашивает: Save / Don’t save / Cancel. Save без имени открывает Save as…, окно закрывается после сохранения. В плагине сохранением занимается DAW.
-- Swing 50–75 %: 50 — ровно, 66,7 — триольное ощущение, 75 — второй шаг группы сдвинут на половину шага (пунктир). Дальше шаг почти сливается со следующим, поэтому выше 75 не идёт (так же у MPC и Elektron).
-
-## Что ещё не проверено
-
-- Звук на реальном устройстве и работа в Reaper/Bitwig: сборка проверялась без звуковой карты и без DAW (офлайн-самопроверка: тайминг, swing, micro, retrig, condition, chance, random, accuracy, переключение частей, все фильтры, нарезка, undo, JSON).
-- Windows и macOS: скрипты сборки готовы, но на этих системах сборка ещё не запускалась.
+The fonts are IBM Plex, under the SIL Open Font License (`resources/fonts/OFL.txt`).
