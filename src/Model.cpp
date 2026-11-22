@@ -232,11 +232,17 @@ static juce::var soundToVar (const SoundSettings& s)
     o->setProperty ("sampleMode", s.sampleMode == SampleMode::Repitch ? "Repitch" : "Keep pitch");
     o->setProperty ("reverse", s.reverse);
     o->setProperty ("swapLR", s.swapLR);
-    o->setProperty ("start", s.start);
-    o->setProperty ("length", s.length);
+    // startPos / lengthPos / fadeInPos / fadeOutPos hold the fine values; start, length (0…127) and
+    // fadeIn, fadeOut (%) are kept rounded for older versions
+    o->setProperty ("startPos", s.startFrac());
+    o->setProperty ("lengthPos", s.lengthFrac());
+    o->setProperty ("start", juce::roundToInt (s.startFrac() * 127.0));
+    o->setProperty ("length", juce::jmax (1, juce::roundToInt (s.lengthFrac() * 127.0)));
     o->setProperty ("stretch", s.stretch);
-    o->setProperty ("fadeIn", s.fadeIn);
-    o->setProperty ("fadeOut", s.fadeOut);
+    o->setProperty ("fadeInPos", s.fadeInFrac());
+    o->setProperty ("fadeOutPos", s.fadeOutFrac());
+    o->setProperty ("fadeIn", juce::roundToInt (s.fadeInFrac() * 100.0));
+    o->setProperty ("fadeOut", juce::roundToInt (s.fadeOutFrac() * 100.0));
     o->setProperty ("tune", s.tune);
     o->setProperty ("fine", s.fine);
     o->setProperty ("amp", juce::String (ampModeName (s.amp)));
@@ -302,11 +308,18 @@ static SoundSettings soundFromVar (const juce::var& v)
     s.sampleMode = v.getProperty ("sampleMode", "Keep pitch").toString() == "Repitch" ? SampleMode::Repitch : SampleMode::KeepPitch;
     s.reverse = (bool) v.getProperty ("reverse", false);
     s.swapLR = (bool) v.getProperty ("swapLR", false);
-    s.start = gi ("start", 0, 0, 127);
-    s.length = gi ("length", 127, 1, 127);
+    // fine values, or the coarse ones of older versions
+    auto gf = [&] (const char* fine, const char* coarse, double coarseMax, double def, int scale, int lo)
+    {
+        double f = v.hasProperty (fine) ? (double) v.getProperty (fine, def)
+                                        : (double) v.getProperty (coarse, def * coarseMax) / coarseMax;
+        return juce::jlimit (lo, scale, juce::roundToInt (f * scale));
+    };
+    s.start = gf ("startPos", "start", 127.0, 0.0, SoundSettings::kPosMax, 0);
+    s.length = gf ("lengthPos", "length", 127.0, 1.0, SoundSettings::kPosMax, 1);
     s.stretch = gi ("stretch", 100, 25, 400);
-    s.fadeIn = gi ("fadeIn", 0, 0, 100);
-    s.fadeOut = gi ("fadeOut", 0, 0, 100);
+    s.fadeIn = gf ("fadeInPos", "fadeIn", 100.0, 0.0, SoundSettings::kFadeMax, 0);
+    s.fadeOut = gf ("fadeOutPos", "fadeOut", 100.0, 0.0, SoundSettings::kFadeMax, 0);
     s.tune = gi ("tune", 0, -24, 24);
     s.fine = gi ("fine", 0, -50, 50);
     s.amp = enumByName<AmpMode> (v.getProperty ("amp", "One-shot").toString(), 3, ampModeName, AmpMode::OneShot);

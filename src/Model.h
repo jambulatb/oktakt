@@ -76,8 +76,16 @@ struct SoundSettings
 
     SampleMode sampleMode = SampleMode::KeepPitch;
     bool reverse = false, swapLR = false;
-    int start = 0, length = 127, stretch = 100;
-    int fadeIn = 0, fadeOut = 0;          // One-shot IN / OUT: % of the played part (Start…Length)
+    // Start / Length: parts of the region (the sample, or each slice) in steps of 1 / kPosMax
+    static constexpr int kPosMax = 100000;
+    // One-shot IN / OUT: parts of the played part (Start…Length) in steps of 1 / kFadeMax (0.1 %)
+    static constexpr int kFadeMax = 1000;
+    int start = 0, length = kPosMax, stretch = 100;
+    int fadeIn = 0, fadeOut = 0;
+    double startFrac() const { return start / (double) kPosMax; }
+    double lengthFrac() const { return length / (double) kPosMax; }
+    double fadeInFrac() const { return fadeIn / (double) kFadeMax; }
+    double fadeOutFrac() const { return fadeOut / (double) kFadeMax; }
 
     int tune = 0, fine = 0;
 

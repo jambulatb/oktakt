@@ -464,8 +464,8 @@ void Engine::startVoice (const EngineSnapshot& snap, const Event& e, double bpmN
         a = s.slices[(size_t) e.sliceIdx].start;
         b = e.sliceIdx + 1 < (int) s.slices.size() ? s.slices[(size_t) e.sliceIdx + 1].start : 1.0;
     }
-    const double stF = s.start / 127.0;
-    const double lnF = s.length / 127.0;
+    const double stF = s.startFrac();
+    const double lnF = s.lengthFrac();
     double s0 = a + (b - a) * stF;
     double e0 = juce::jmin (b, s0 + (b - a) * lnF);
     if (e0 <= s0) return;
@@ -500,8 +500,8 @@ void Engine::startVoice (const EngineSnapshot& snap, const Event& e, double bpmN
     v->fadeOutLen = juce::jmax (1.0f, 0.002f * fsr);
     v->fadeInLen = juce::jmax (1.0f, 0.0007f * fsr);
     v->fadeInLeft = (s.reverse ? e0 < 0.9999 : s0 > 0.0001) ? (int) v->fadeInLen : 0;
-    v->userIn = s.amp == AmpMode::OneShot ? (v->hi - v->lo) * s.fadeIn / 100.0 : 0.0;
-    v->userOut = s.amp == AmpMode::OneShot ? (v->hi - v->lo) * s.fadeOut / 100.0 : 0.0;
+    v->userIn = s.amp == AmpMode::OneShot ? (v->hi - v->lo) * s.fadeInFrac() : 0.0;
+    v->userOut = s.amp == AmpMode::OneShot ? (v->hi - v->lo) * s.fadeOutFrac() : 0.0;
     v->killing = false;
     v->killGain = 1.0f;
 

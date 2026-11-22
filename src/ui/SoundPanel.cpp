@@ -102,12 +102,9 @@ WaveView::Geo WaveView::geometry() const
 {
     Geo g;
     g.w = (float) getWidth();
-    g.h = (float) getHeight() - 4.0f - kTicksH - (editing ? kOverviewH : 0);
-    if (editing)
-    {
-        g.v0 = viewStart;
-        g.vl = viewLen;
-    }
+    g.h = (float) getHeight() - 4.0f - kTicksH - kOverviewH;
+    g.v0 = viewStart;
+    g.vl = viewLen;
     auto* t = const_cast<Session&> (session).selectedTrack();
     if (t == nullptr) return g;
     auto s = session.samples.getCached (t->samplePath);
@@ -143,10 +140,12 @@ void WaveView::clampView()
 
 void WaveView::setView (double start, double length)
 {
+    const bool was = isZoomed();
     viewStart = start;
     viewLen = length;
     clampView();
     repaint();
+    if (was != isZoomed() && onZoomChanged) onZoomChanged();
 }
 
 void WaveView::resetZoom()
@@ -156,11 +155,11 @@ void WaveView::resetZoom()
     viewStart = 0.0;
     viewLen = 1.0;
     repaint();
+    if (onZoomChanged) onZoomChanged();
 }
 
 void WaveView::zoomToBar()
 {
-    if (! editing) return;
     const auto g = geometry();
     const int bar = isZoomed() ? (int) std::floor ((viewStart + viewLen * 0.5) * g.span) : 0;
     setView (bar / (double) g.span, 1.0 / g.span);
@@ -168,14 +167,12 @@ void WaveView::zoomToBar()
 
 void WaveView::zoomAround (float x, double factor)
 {
-    if (! editing || factor <= 0.0) return;
+    if (factor <= 0.0) return;
     const auto g = geometry();
     if (g.w <= 0.0f) return;
     const double t = g.tAt (x);
-    viewLen = juce::jlimit (minViewLength(), 1.0, viewLen / factor);
-    viewStart = t - x / g.w * viewLen;
-    clampView();
-    repaint();
+    const double len = juce::jlimit (minViewLength(), 1.0, viewLen / factor);
+    setView (t - x / g.w * len, len);
 }
 
 bool WaveView::overOverview (juce::Point<float> p) const
@@ -289,12 +286,12 @@ void WaveView::paint (juce::Graphics& g)
             for (auto& [a, b] : regions)
             {
                 if (f < a || f >= b) continue;
-                double s0 = a + (b - a) * s.start / 127.0;
-                double e0 = juce::jmin (b, s0 + (b - a) * s.length / 127.0);
+                double s0 = a + (b - a) * s.startFrac();
+                double e0 = juce::jmin (b, s0 + (b - a) * s.lengthFrac());
                 if (f < s0 || f >= e0) return 1.0f;
                 double len = e0 - s0, gn = 1.0;
-                if (s.fadeIn > 0) gn = juce::jmin (gn, (f - s0) / (len * s.fadeIn / 100.0));
-                if (s.fadeOut > 0) gn = juce::jmin (gn, (e0 - f) / (len * s.fadeOut / 100.0));
+                if (s.fadeIn > 0) gn = juce::jmin (gn, (f - s0) / (len * s.fadeInFrac()));
+                if (s.fadeOut > 0) gn = juce::jmin (gn, (e0 - f) / (len * s.fadeOutFrac()));
                 return (float) juce::jlimit (0.0, 1.0, gn);
             }
             return 1.0f;
@@ -387,8 +384,8 @@ void WaveView::paint (juce::Graphics& g)
         auto secs = [] (int k) { return k == 0 ? 0.0001f : dsp::knobToSeconds (k); };
         for (auto& [a, b] : regions)
         {
-            double s0 = a + (b - a) * s.start / 127.0;
-            double e0 = juce::jmin (b, s0 + (b - a) * s.length / 127.0);
+            double s0 = a + (b - a) * s.startFrac();
+            double e0 = juce::jmin (b, s0 + (b - a) * s.lengthFrac());
             g.setColour (juce::Colours::black.withAlpha (0.6f));
             if (s0 > a) g.fillRect (geo.xOf (a), 0.0f, geo.xOf (s0) - geo.xOf (a), geo.h);
             if (e0 < b) g.fillRect (geo.xOf (e0), 0.0f, geo.xOf (b) - geo.xOf (e0), geo.h);
@@ -397,7 +394,7 @@ void WaveView::paint (juce::Graphics& g)
             if (fades)
             {
                 auto yAt = [&] (double f) { return bottom - (bottom - top) * fadeGain (f); };
-                double fi = s0 + (e0 - s0) * s.fadeIn / 100.0, fo = e0 - (e0 - s0) * s.fadeOut / 100.0;
+                double fi = s0 + (e0 - s0) * s.fadeInFrac(), fo = e0 - (e0 - s0) * s.fadeOutFrac();
                 if (fi > fo) fi = fo = s0 + (e0 - s0) * s.fadeIn / (double) (s.fadeIn + s.fadeOut);
                 env.startNewSubPath (xs, yAt (s0));
                 env.lineTo (geo.xOf (fi), yAt (fi));
@@ -695,20 +692,15 @@ void WaveView::mouseUp (const juce::MouseEvent& e)
 
 void WaveView::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (e.position.y > geometry().h) { resetZoom(); return; }   // on the ruler: the whole sample
     auto* t = session.selectedTrack();
     if (t == nullptr || ! editing || t->sound.play != PlayMode::Slices) return;
-    if (e.position.y > geometry().h) { resetZoom(); return; }   // on the ruler: the whole sample
     if (markerAt (e.position.x) > 0) return;
     session.addMarker (t->id, fracAt (e.position.x));
 }
 
 void WaveView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
-    if (! editing)
-    {
-        Component::mouseWheelMove (e, w);
-        return;
-    }
     const float sign = w.isReversed ? -1.0f : 1.0f;
     if (e.mods.isCommandDown() || e.mods.isCtrlDown())
     {
@@ -728,7 +720,7 @@ void WaveView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
 
 void WaveView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
 {
-    if (editing) zoomAround (e.position.x, scaleFactor);
+    zoomAround (e.position.x, scaleFactor);
 }
 
 bool WaveView::isInterestedInDragSource (const SourceDetails& d)
@@ -790,20 +782,30 @@ SoundPanel::SoundPanel (Session& s, UiHost& h) : session (s), host (h), wave (s)
 
     editBtn.padX = 14;
     editBtn.radius = 6.0f;
-    editBtn.onClick = [this] { wave.editing = ! wave.editing; wave.resetZoom(); refresh(); };
+    editBtn.onClick = [this] { wave.editing = ! wave.editing; refresh(); };   // the zoom stays as it is
     addChildComponent (editBtn);
 
-    // Zoom in the slice editor
-    zoomAll.text = "Sample";
-    zoomAll.radius = 6.0f;
-    zoomAll.onClick = [this] { wave.resetZoom(); };
-    zoomAll.setTooltip ("Show the whole sample. Double-clicking the ruler does the same");
-    addChildComponent (zoomAll);
-    zoomBar.text = "Bar";
-    zoomBar.radius = 6.0f;
-    zoomBar.onClick = [this] { wave.zoomToBar(); };
-    zoomBar.setTooltip ("Zoom to one bar: the first one, or the one in the middle of the view");
-    addChildComponent (zoomBar);
+    // Zoom of the wave, in both modes
+    auto zoomBtn = [this] (Btn& b, const juce::String& text, const juce::String& tip, std::function<void()> fn)
+    {
+        b.text = text;
+        b.radius = 6.0f;
+        b.font = sans (12.0f, 600);
+        b.onClick = std::move (fn);
+        b.setTooltip (tip);
+        addAndMakeVisible (b);
+    };
+#if JUCE_MAC
+    const juce::String zoomKey = "Cmd";
+#else
+    const juce::String zoomKey = "Ctrl";
+#endif
+    zoomBtn (zoomOut, juce::String::fromUTF8 ("\xe2\x88\x92"), "Zoom out", [this] { wave.zoomAround (wave.getWidth() * 0.5f, 0.5); });
+    zoomBtn (zoomIn, "+", "Zoom in. " + zoomKey + "+scroll or pinch on the wave zooms where the pointer is", [this] { wave.zoomAround (wave.getWidth() * 0.5f, 2.0); });
+    zoomBtn (zoomBar, "Bar", "Zoom to one bar: the first one, or the one in the middle of the view", [this] { wave.zoomToBar(); });
+    zoomBtn (zoomAll, "Sample", "Show the whole sample. Double-clicking the ruler does the same", [this] { wave.resetZoom(); });
+    wave.onZoomChanged = [this] { updateZoomButtons(); };
+    updateZoomButtons();
 
     chop.items = { "By hits", "Equal parts", "Manual" };
     chop.padX = 11;
@@ -832,6 +834,14 @@ SoundPanel::SoundPanel (Session& s, UiHost& h) : session (s), host (h), wave (s)
 }
 
 SoundPanel::~SoundPanel() = default;
+
+void SoundPanel::updateZoomButtons()
+{
+    const bool z = wave.isZoomed();
+    zoomOut.dimmed = zoomAll.dimmed = ! z;
+    zoomOut.repaint();
+    zoomAll.repaint();
+}
 
 void SoundPanel::setChop (ChopMode m)
 {
@@ -864,17 +874,16 @@ void SoundPanel::refresh()
     const bool slices = t->sound.play == PlayMode::Slices;
     if (! slices) wave.editing = false;
     const bool editing = wave.editing;
-    if (! editing || t->samplePath != shownSample) wave.resetZoom();   // zoom lives in the slice editor only
+    if (t->id != zoomTrack || t->samplePath != shownSample) wave.resetZoom();   // another sample: show all of it
+    zoomTrack = t->id;
     shownSample = t->samplePath;
-    zoomAll.setVisible (editing);
-    zoomBar.setVisible (editing);
 #if JUCE_MAC
     const juce::String zoomKey = "Cmd";
 #else
     const juce::String zoomKey = "Ctrl";
 #endif
-    wave.setTooltip (editing ? zoomKey + juce::String::fromUTF8 ("+scroll or pinch to zoom \xc2\xb7 scroll to move along \xc2\xb7 double-click the ruler to see the whole sample")
-                             : juce::String());
+    wave.setTooltip (zoomKey + juce::String::fromUTF8 ("+scroll or pinch to zoom \xc2\xb7 scroll to move along when zoomed in \xc2\xb7 double-click the ruler to see the whole sample"));
+    updateZoomButtons();
 
     editBtn.setVisible (slices);
     editBtn.text = editing ? "Done" : "Edit slices";
@@ -904,6 +913,18 @@ void SoundPanel::resized()
     head.removeFromLeft (18);
     tabs.setBounds (head.removeFromLeft (tabs.idealWidth()));
     close.setBounds (head.removeFromRight (28).withSizeKeepingCentre (28, 28));
+    head.removeFromRight (14);
+    {
+        // zoom: − + Bar Sample, next to Close
+        const int wa = zoomAll.idealWidth (12), wb = zoomBar.idealWidth (12);
+        zoomAll.setBounds (head.removeFromRight (wa).withSizeKeepingCentre (wa, 26));
+        head.removeFromRight (6);
+        zoomBar.setBounds (head.removeFromRight (wb).withSizeKeepingCentre (wb, 26));
+        head.removeFromRight (6);
+        zoomIn.setBounds (head.removeFromRight (26).withSizeKeepingCentre (26, 26));
+        head.removeFromRight (4);
+        zoomOut.setBounds (head.removeFromRight (26).withSizeKeepingCentre (26, 26));
+    }
     r.removeFromTop (10);
 
     // The wave stays where it is in both modes: the slice count sits next to the tabs,
@@ -912,7 +933,7 @@ void SoundPanel::resized()
     head.removeFromLeft (14);
     infoArea = slices ? head.removeFromLeft (100) : juce::Rectangle<int>();
 
-    wave.setBounds (r.removeFromTop ((wave.editing ? 158 + WaveView::kOverviewH : 90) + 4 + WaveView::kTicksH));
+    wave.setBounds (r.removeFromTop ((wave.editing ? 158 : 90) + WaveView::kOverviewH + 4 + WaveView::kTicksH));
     {
         const int bw = editBtn.idealWidth (14);
         editBtn.setBounds (wave.getRight() - 6 - bw, wave.getY() + 20, bw, 24);   // under the slice number tabs
@@ -926,13 +947,6 @@ void SoundPanel::resized()
         row.removeFromLeft (12);
         chop.setBounds (row.removeFromLeft (chop.idealWidth()).withSizeKeepingCentre (chop.idealWidth(), 32));
         row.removeFromLeft (12);
-        {
-            const int wb = zoomBar.idealWidth (12), wa = zoomAll.idealWidth (12);
-            zoomBar.setBounds (row.removeFromRight (wb).withSizeKeepingCentre (wb, 26));
-            row.removeFromRight (6);
-            zoomAll.setBounds (row.removeFromRight (wa).withSizeKeepingCentre (wa, 26));
-            row.removeFromRight (12);
-        }
         sensLabel = partsLabel = hintArea = {};
         if (t && t->sound.chop == ChopMode::Transients)
         {
@@ -1035,7 +1049,11 @@ Knob& SoundPanel::addKnob (const juce::String& label, int min, int max, int def,
     k->set = [this, ref] (int v) { if (auto* t = session.selectedTrack()) { ref (*t) = v; session.changed(); } };
     k->format = fmt;
     k->colour = [this] { auto* t = session.selectedTrack(); return t ? trackColour (t->colour) : C::orange; };
-    k->setTooltip (label + ". Drag up or down or scroll, double-click resets");
+#if JUCE_MAC
+    k->setTooltip (label + ". Drag up or down or scroll (Shift: finer, Cmd: finest), double-click resets");
+#else
+    k->setTooltip (label + ". Drag up or down or scroll (Shift: finer, Ctrl: finest), double-click resets");
+#endif
     auto& out = *k;
     addAndMakeVisible (*k);
     blockKids.push_back (std::move (k));
@@ -1116,6 +1134,21 @@ void SoundPanel::rebuildBlocks()
     };
     auto header = [&] (int bi) { auto& b = blocks[(size_t) bi]; return juce::Rectangle<int> (b.bounds.getX() + 9, 7, b.bounds.getWidth() - 18, 20); };
     auto pct = [] (int v) { return juce::String (v) + "%"; };
+    // a fine value in steps of 1 / scale as a percentage, without trailing zeros: 12.5%, 0.025%, 100%
+    auto finePct = [] (int scale, int decimals)
+    {
+        return [scale, decimals] (int v)
+        {
+            auto txt = juce::String (v * 100.0 / scale, decimals);
+            if (txt.containsChar ('.')) txt = txt.trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+            return txt + "%";
+        };
+    };
+#if JUCE_MAC
+    const juce::String fineKeys = "Shift: finer, Cmd: finest";
+#else
+    const juce::String fineKeys = "Shift: finer, Ctrl: finest";
+#endif
     auto refresher = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<SoundPanel> (this)] { if (sp) sp->refresh(); }); };
 
     // PITCH
@@ -1148,8 +1181,15 @@ void SoundPanel::rebuildBlocks()
         m.setTooltip ("Keep pitch: stretching keeps the pitch. Repitch: pitch follows the length");
         auto h = header (bi);
         place (m, { h.getRight() - 78, h.getY(), 78, 20 });
-        place (addKnob ("Start", 0, 127, 0, [] (Track& x) -> int& { return x.sound.start; }), cell (bi, 0));
-        place (addKnob ("Length", 1, 127, 127, [] (Track& x) -> int& { return x.sound.length; }), cell (bi, 1));
+        constexpr int P = SoundSettings::kPosMax;
+        auto& st = addKnob ("Start", 0, P, 0, [] (Track& x) -> int& { return x.sound.start; }, finePct (P, 3));
+        st.setTooltip ("Start: where playback begins, in % of the sample (of each slice in Slices). Drag or scroll ("
+                       + fineKeys + "), double-click resets. Zoom in on the wave to see it closely");
+        place (st, cell (bi, 0));
+        auto& ln = addKnob ("Length", 1, P, P, [] (Track& x) -> int& { return x.sound.length; }, finePct (P, 3));
+        ln.setTooltip ("Length: how much plays from Start, in % of the sample (of each slice in Slices). Drag or scroll ("
+                       + fineKeys + "), double-click resets");
+        place (ln, cell (bi, 1));
         place (addKnob ("Stretch", 25, 400, 100, [] (Track& x) -> int& { return x.sound.stretch; }, pct), cell (bi, 2));
         auto c = cell (bi, 3);
         auto& rev = addPill ("REVERSE", [] (Track& x) -> bool& { return x.sound.reverse; }, "Play the sample backwards");
@@ -1185,11 +1225,14 @@ void SoundPanel::rebuildBlocks()
         if (t->sound.amp == AmpMode::OneShot)
         {
             // Fades like IN / OUT of a sampler: IN from Start, OUT up to the end set by Length (in each slice in Slices)
-            auto& in = addKnob ("In", 0, 100, 0, [] (Track& x) -> int& { return x.sound.fadeIn; }, pct);
-            in.setTooltip ("Fade in from the Start point, in % of the part that plays. In Slices: inside each slice. Drag or scroll, double-click resets");
+            constexpr int F = SoundSettings::kFadeMax;
+            auto& in = addKnob ("In", 0, F, 0, [] (Track& x) -> int& { return x.sound.fadeIn; }, finePct (F, 1));
+            in.setTooltip ("Fade in from the Start point, in % of the part that plays. In Slices: inside each slice. Drag or scroll ("
+                           + fineKeys + "), double-click resets");
             place (in, cell (bi, 0));
-            auto& outK = addKnob ("Out", 0, 100, 0, [] (Track& x) -> int& { return x.sound.fadeOut; }, pct);
-            outK.setTooltip ("Fade out to the end set by Length, in % of the part that plays. In Slices: inside each slice. Drag or scroll, double-click resets");
+            auto& outK = addKnob ("Out", 0, F, 0, [] (Track& x) -> int& { return x.sound.fadeOut; }, finePct (F, 1));
+            outK.setTooltip ("Fade out to the end set by Length, in % of the part that plays. In Slices: inside each slice. Drag or scroll ("
+                             + fineKeys + "), double-click resets");
             place (outK, cell (bi, 2));
         }
         else if (t->sound.amp == AmpMode::AHD)

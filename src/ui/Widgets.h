@@ -38,7 +38,8 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
 };
 
-// A rotary control: drag up/down or scroll, double-click resets. List mode cycles through names.
+// A rotary control: drag up/down or scroll (Shift: finer, Ctrl / Cmd: finest), double-click resets.
+// List mode cycles through names.
 class Knob : public juce::Component, public juce::SettableTooltipClient
 {
 public:
@@ -73,7 +74,7 @@ private:
     void apply (int v);
     Session& session;
     float dragStartY = 0;
-    int dragStartVal = 0;
+    double dragAcc = 0;
     bool dragging = false;
     float wheelAcc = 0;
 };

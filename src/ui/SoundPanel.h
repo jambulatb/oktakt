@@ -44,13 +44,14 @@ public:
     bool editing = false;
     int selectedSlice = -1;
     static constexpr int kTicksH = 16;
-    static constexpr int kOverviewH = 8;   // under the ruler in the slice editor: which part of the sample is shown
+    static constexpr int kOverviewH = 8;   // under the ruler when zoomed in: which part of the sample is shown
 
-    // Zoom works in the slice editor only; outside it the whole sample is shown
+    // Zoom works in both modes; the view stays when the slice editor opens or closes
+    std::function<void()> onZoomChanged;             // zoomed in or back to the whole sample
     void resetZoom();
     void zoomToBar();                                // the bar under the middle of the view
     void zoomAround (float x, double factor);        // factor > 1 zooms in; the point under x stays put
-    bool isZoomed() const { return editing && viewLen < 0.9999; }
+    bool isZoomed() const { return viewLen < 0.9999; }
     double visibleStart() const { return viewStart; }   // fractions of the timeline under the ruler
     double visibleLength() const { return viewLen; }
     float xOfSampleFrac (double frac) const { return geometry().xOf (frac); }
@@ -133,11 +134,12 @@ private:
     Btn& addPill (const juce::String& text, std::function<bool& (Track&)> ref, const juce::String& tip);
     Btn& addMenu (std::function<juce::String()> text, std::function<void (Btn&)> open);
     void setChop (ChopMode m);
+    void updateZoomButtons();
 
     Session& session;
     UiHost& host;
 
-    Btn close, editBtn, zoomAll, zoomBar;
+    Btn close, editBtn, zoomOut, zoomIn, zoomBar, zoomAll;
     Seg tabs, chop;
     ValueBox sens, parts;
     WaveView wave;
@@ -147,7 +149,7 @@ private:
     std::vector<std::unique_ptr<juce::Component>> blockKids;
     std::vector<Btn*> pills;
     juce::String builtKey;
-    uint32_t shownTrack = 0;
+    uint32_t shownTrack = 0, zoomTrack = 0;
     juce::String shownSample;
 };
 

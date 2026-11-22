@@ -115,19 +115,28 @@ void Knob::mouseDown (const juce::MouseEvent& e)
     if (e.mods.isPopupMenu()) return;
     dragging = list.isEmpty();
     dragStartY = (float) e.position.y;
-    dragStartVal = get();
+    dragAcc = (double) get();
     if (dragging) session.checkpoint();
+}
+
+// Shift: 10 times finer, Ctrl (Cmd on a Mac): 100 times finer
+static double fineFactor (const juce::ModifierKeys& m)
+{
+    return m.isCommandDown() ? 0.01 : (m.isShiftDown() ? 0.1 : 1.0);
 }
 
 void Knob::mouseDrag (const juce::MouseEvent& e)
 {
     if (! dragging) return;
-    float range = (float) (max - min);
-    float sens = range > 60.0f ? 1.0f : 0.3f;
-    if (range > 300.0f) sens = 2.0f;
-    if (e.mods.isShiftDown()) sens *= 0.25f;
-    float dy = dragStartY - (float) e.position.y;
-    apply (dragStartVal + (int) std::lround (dy * sens));
+    const double range = (double) (max - min);
+    double sens = range > 60.0 ? 1.0 : 0.3;
+    if (range > 300.0) sens = 2.0;
+    if (range >= 1000.0) sens = range / 160.0;   // fine-grained values: the whole range in about 160 px
+    // Step by step, so pressing or letting go of Shift / Ctrl mid-drag doesn't make the value jump
+    const float y = (float) e.position.y;
+    dragAcc = juce::jlimit ((double) min, (double) max, dragAcc + (dragStartY - y) * sens * fineFactor (e.mods));
+    dragStartY = y;
+    apply ((int) std::lround (dragAcc));
 }
 
 void Knob::mouseUp (const juce::MouseEvent& e)
@@ -162,8 +171,10 @@ void Knob::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDeta
         apply (((get() + steps) % n + n) % n);
         return;
     }
-    int step = (max - min) > 300 ? 2 : 1;
-    if (e.mods.isShiftDown()) step = 1;
+    const int range = max - min;
+    int step = range >= 1000 ? range / 200 : (range > 300 ? 2 : 1);
+    if (e.mods.isShiftDown() || e.mods.isCommandDown())
+        step = range >= 1000 ? juce::jmax (1, (int) std::lround (step * fineFactor (e.mods))) : 1;
     apply (get() + steps * step);
 }
 

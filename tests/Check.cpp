@@ -215,6 +215,9 @@ struct Runner : juce::Timer
         steps.push_back ([this] { snapshot ("ui_slice_zoom.png"); zoomToSamples(); return true; });
         steps.push_back ([this] { return settle (4); });
         steps.push_back ([this] { snapshot ("ui_slice_samples.png"); zoomResetTest(); return true; });
+        steps.push_back ([this] { wholeZoom(); return true; });
+        steps.push_back ([this] { return settle (4); });
+        steps.push_back ([this] { snapshot ("ui_whole_zoom.png"); return true; });
         steps.push_back ([this] { emptyPattern(); return true; });
         steps.push_back ([this] { return settle (4); });
         steps.push_back ([this] { snapshot ("ui_empty.png"); return true; });
@@ -596,7 +599,7 @@ struct Runner : juce::Timer
 
         // One-shot IN / OUT (the 2 s note of the stretch check has to end first)
         setHits (si, { 0 });
-        track (si).sound.fadeIn = 50;
+        track (si).sound.fadeIn = 500;
         track (si).sound.fadeOut = 0;
         s().changed(); stopAndFlush(); render ((int) kSr * 2, false);
         auto x = render (48000);
@@ -604,7 +607,7 @@ struct Runner : juce::Timer
         check (early < 0.15f * late && mid > 0.9f * late && mid < 1.05f * late, "In 50%: rises over the first half ("
                + juce::String (early, 3) + " / " + juce::String (mid, 3) + " / " + juce::String (late, 3) + ")");
         track (si).sound.fadeIn = 0;
-        track (si).sound.fadeOut = 25;
+        track (si).sound.fadeOut = 250;
         s().changed(); stopAndFlush();
         x = render (48000);
         check (rms (x, 30000, 34000) > 0.5f && rms (x, 46000, 47500) < 0.1f, "Out 25%: fades the last quarter");
@@ -778,6 +781,23 @@ struct Runner : juce::Timer
 
         track (0).step = StepSettings();
         hit (0, 4).marked = false;
+
+        // Fine Start / Length / In / Out survive a round trip; files with the old 0…127 / % values still load
+        {
+            auto d5 = Document::fromVar (juce::JSON::parse (json).getProperty ("pattern", {}));
+            auto& snd = d5.tracks[0].sound;
+            snd.start = 12345; snd.length = 54321; snd.fadeIn = 123; snd.fadeOut = 7;
+            auto v5 = juce::JSON::parse (juce::JSON::toString (d5.toVar()));
+            const auto& r5 = Document::fromVar (v5).tracks[0].sound;
+            check (r5.start == 12345 && r5.length == 54321 && r5.fadeIn == 123 && r5.fadeOut == 7,
+                   "fine Start / Length / In / Out kept in the file");
+            auto* so = v5["tracks"][0]["sound"].getDynamicObject();
+            for (auto k : { "startPos", "lengthPos", "fadeInPos", "fadeOutPos" }) so->removeProperty (k);
+            so->setProperty ("start", 64); so->setProperty ("length", 127); so->setProperty ("fadeIn", 30); so->setProperty ("fadeOut", 0);
+            const auto& o5 = Document::fromVar (v5).tracks[0].sound;
+            check (o5.start == juce::roundToInt (64.0 / 127.0 * SoundSettings::kPosMax) && o5.length == SoundSettings::kPosMax
+                   && o5.fadeIn == 300 && o5.fadeOut == 0, "old 0-127 Start / Length and % In / Out converted");
+        }
 
         // Version 1 files: the track's Micro was added to the hit's own and skipped pinned hits
         {
@@ -1015,12 +1035,35 @@ struct Runner : juce::Timer
     {
         auto* wv = findChild<ui::WaveView> (*editor);
         if (wv == nullptr) return;
+        const double len = wv->visibleLength(), start = wv->visibleStart();
         if (auto* b = findButton (*editor, "Done")) b->onClick();
-        check (! wv->editing && wv->visibleLength() == 1.0 && wv->visibleStart() == 0.0, "leaving the slice editor shows the whole sample again");
+        check (! wv->editing && wv->visibleLength() == len && wv->visibleStart() == start, "leaving the slice editor keeps the zoom");
+        if (auto* b = findButton (*editor, "Sample")) b->onClick();
+        check (! wv->isZoomed(), "Sample shows the whole sample outside the slice editor too");
         wv->zoomAround (10.0f, 4.0);
-        check (wv->visibleLength() == 1.0, "no zoom outside the slice editor");
+        check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "zoom works outside the slice editor");
+        if (auto* b = findButton (*editor, "+")) b->onClick();
+        check (std::abs (wv->visibleLength() - 0.125) < 1.0e-9, "+ zooms in 2x");
+        if (auto* b = findButton (*editor, juce::String::fromUTF8 ("\xe2\x88\x92"))) b->onClick();
+        check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "- zooms out 2x");
         if (auto* b = findButton (*editor, "Edit slices")) b->onClick();
-        check (wv->editing && ! wv->isZoomed(), "the slice editor opens again on the whole sample");
+        check (wv->editing && std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "the slice editor opens with the same zoom");
+        if (auto* b = findButton (*editor, "Done")) b->onClick();
+    }
+
+    // Whole mode zoomed in on a fine Start
+    void wholeZoom()
+    {
+        auto& br = track (4);
+        br.sound.play = PlayMode::Whole;
+        br.sound.start = 1234;   // 1.234 %
+        s().changed();
+        if (auto* wv = findChild<ui::WaveView> (*editor))
+        {
+            wv->resetZoom();
+            wv->zoomAround (wv->xOfSampleFrac (0.01234), 40.0);
+            check (! wv->editing && wv->isZoomed(), "Whole mode zoomed in");
+        }
     }
 
     void closeAsk (int)
@@ -1099,9 +1142,9 @@ struct Runner : juce::Timer
         for (auto& [k, h] : s().doc.parts[0].tracks[track (4).id].hits) h.marked = false;
         auto& br = track (4);
         br.sound.amp = AmpMode::OneShot;
-        br.sound.fadeIn = 20;
-        br.sound.fadeOut = 45;
-        br.sound.length = 110;
+        br.sound.fadeIn = 200;
+        br.sound.fadeOut = 450;
+        br.sound.length = 86614;   // 110 of 127
         s().selected = br.id;
         s().changed();
     }
