@@ -324,10 +324,6 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
 
         scratch.clear();
         auto it = part.tracks.find (tr.id);
-        bool anyMarked = false;
-        if (it != part.tracks.end())
-            for (auto& [key, h] : it->second.hits)
-                anyMarked = anyMarked || (h.marked && barOfKey (key) < part.bars && stepOfKey (key) < per);
         static const StepSettings noStep;
         if (it != part.tracks.end())
         {
@@ -359,9 +355,8 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                 const auto& ref = scratch[j];
                 const Hit& h = *ref.hit;
                 const int st = stepOfKey (ref.key);
-                // The track's STEP: on the marked hits, or on all when none is marked
-                const bool inStep = ! anyMarked || h.marked;
-                const StepSettings& step = inStep ? tr.step : noStep;
+                // The track's STEP acts on the marked hits only; with none marked it acts on nothing
+                const StepSettings& step = h.marked ? tr.step : noStep;
 
                 if (! step.playsOnPass (passNo)) continue;
                 if (step.chance < 100 && hash01 (seed, tr.id, (uint64_t) ref.key, 1) * 100.0 >= step.chance) continue;

@@ -294,9 +294,8 @@ void SidePanel::paint (juce::Graphics& g)
 
     title (stepTitle, "STEP");
     const int marked = session.markedCount (t->id);
-    juce::String target = marked > 0 ? juce::String (marked) + " marked"
-                                     : juce::String::fromUTF8 ("all hits \xc2\xb7 ") + juce::String (session.hitCount (t->id));
-    g.setColour (C::text);
+    juce::String target = marked > 0 ? juce::String (marked) + " marked" : juce::String ("no marked hits");
+    g.setColour (marked > 0 ? C::text : C::muted);
     g.setFont (sans (12.0f, 600));
     g.drawText (target, clearCompact ? stepTitle.withTrimmedRight (26) : stepTitle, juce::Justification::centredRight, false);
 

@@ -139,7 +139,7 @@ struct Hit
 
     int velocity = 100;
     std::array<int16_t, kNumParams> p;
-    bool marked = false;   // marked for STEP: when a track has marked hits in a part, STEP acts on them only
+    bool marked = false;   // marked for STEP: STEP acts on the marked hits only
     bool pinned = false;
     int sliceId = -1;     // -1 = slices play in hit order
 
@@ -177,7 +177,7 @@ struct Track
     SoundSettings sound;
     std::vector<ParamId> rows;    // automation rows besides Velocity
 
-    // STEP: one per track. Acts on the marked hits of a part, or on all its hits when none is marked
+    // STEP: one per track. Acts on the marked hits of a part only, on nothing when none is marked
     StepSettings step;
 
     // POSITION: the track's Micro, the base value of the per-hit Micro row like SOUND is for the others

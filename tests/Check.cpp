@@ -311,6 +311,7 @@ struct Runner : juce::Timer
         clearAll();
         setHits (2, { 0 });
         soloOnly (2);
+        hit (2, 0).marked = true;
         track (2).step.retrig = 3;
         track (2).step.retrigLen = 4;
         s().changed();
@@ -322,6 +323,7 @@ struct Runner : juce::Timer
         // Condition: plays on pass 1 of 2 only
         clearAll();
         setHits (2, { 0 });
+        hit (2, 0).marked = true;
         track (2).step.condN = 2;
         track (2).step.condMask = 0b01;
         s().changed();
@@ -346,19 +348,27 @@ struct Runner : juce::Timer
         // Chance 0
         clearAll();
         setHits (2, { 0, 8 });
+        hit (2, 0).marked = true;
+        hit (2, 8).marked = true;
         track (2).step.chance = 0;
         s().changed();
         stopAndFlush();
         o = onsets (render (96000 * 2));
         check (o.empty(), "chance 0% never plays");
 
-        // STEP acts on the marked hits only, when some are marked
-        hit (2, 8).marked = true;
+        // STEP acts on the marked hits only
+        hit (2, 0).marked = false;
         s().changed();
         stopAndFlush();
         o = onsets (render (96000));
         check (o.size() == 1 && near (o[0], 0), "STEP on a marked hit leaves the unmarked one alone: onsets " + list (o));
+
+        // With no marked hits STEP acts on none of them
         hit (2, 8).marked = false;
+        s().changed();
+        stopAndFlush();
+        o = onsets (render (96000));
+        check (o.size() == 2 && near (o[0], 0) && near (o[1], 48000), "no marked hits: STEP acts on none: onsets " + list (o));
         track (2).step = StepSettings();
 
         // Random 100%: something changes between passes but pinned hits stay

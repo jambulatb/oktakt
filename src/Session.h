@@ -84,7 +84,7 @@ public:
     void scrollSlice (uint32_t id, int key, int delta);
     int sliceNumberOf (const Track& t, int key);   // 1-based slice shown on a hit, 0 if none
 
-    // STEP of the active track acts on its marked hits in this part, or on all when none is marked
+    // STEP of the active track acts on its marked hits in this part only, on nothing when none is marked
     bool hasMarks() const;
     int markedCount (uint32_t id) const;
     int hitCount (uint32_t id) const;
