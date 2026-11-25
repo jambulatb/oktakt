@@ -53,11 +53,13 @@ enum class SampleMode { KeepPitch, Repitch };
 enum class AmpMode    { OneShot, AHD, ADSR };
 enum class FilterType { LP12, LP24, HP12, HP24, BP, Notch, Ladder, Morph, Comb, Formant, Count };
 enum class StereoMode { Original, Mono, Narrow, Wide, Haas, Alternate, Count };
+enum class DriveType  { Drive, Overdrive, Tape, Fuzz, Clip, Fold, Rectify, Count };   // the shape of Drive
 enum class SwitchMode { Now, BarEnd, PartEnd };
 
 const char* filterName (FilterType);
 const char* stereoName (StereoMode);
 const char* ampModeName (AmpMode);
+const char* driveName (DriveType);
 
 struct Slice
 {
@@ -101,6 +103,7 @@ struct SoundSettings
     int gain = 0;
     bool autoGain = true;
     int drive = 0, bitRed = 0, srRed = 0;
+    DriveType driveType = DriveType::Drive;
     StereoMode stereo = StereoMode::Original;
     std::array<int, (int) StereoMode::Count> stereoAmt { 0, 0, 50, 150, 12, 60 };
 

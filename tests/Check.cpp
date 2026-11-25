@@ -591,6 +591,56 @@ struct Runner : juce::Timer
         check (finite, "all filters, drive, bits, SR, transient, stereo: output is finite");
         check (audible, "all filter types produce sound in a sane range");
         track (3).sound = SoundSettings();
+
+        // Drive types: each one sounds, stays finite and at a sane level with Auto gain, and they differ
+        {
+            std::vector<std::vector<float>> outs;
+            bool ok = true;
+            for (int d = 0; d < (int) DriveType::Count; ++d)
+            {
+                auto& snd = track (3).sound;
+                snd = SoundSettings();
+                snd.drive = 100;
+                snd.driveType = (DriveType) d;
+                s().changed();
+                stopAndFlush();
+                auto x = render (24000);
+                float peak = 0;
+                for (auto v : x) { if (! std::isfinite (v)) ok = false; peak = juce::jmax (peak, std::abs (v)); }
+                if (peak < 0.02f || peak > 20.0f) ok = false;
+                outs.push_back (std::move (x));
+            }
+            bool differ = true;
+            for (size_t a = 0; a < outs.size(); ++a)
+                for (size_t b = a + 1; b < outs.size(); ++b)
+                {
+                    double diff = 0;
+                    for (size_t i = 0; i < outs[a].size(); ++i) diff += std::abs (outs[a][i] - outs[b][i]);
+                    if (diff < 1.0) differ = false;
+                }
+            // The shapes themselves: silence stays silent, never past full scale, odd and even shapes as meant
+            bool shapes = true;
+            for (int d = 0; d < (int) DriveType::Count; ++d)
+            {
+                if (std::abs (dsp::shapeDrive (d, 0.0f)) > 1.0e-3f) shapes = false;
+                for (float x = -60.0f; x <= 60.0f; x += 0.01f)
+                    if (! std::isfinite (dsp::shapeDrive (d, x)) || std::abs (dsp::shapeDrive (d, x)) > 1.05f) shapes = false;
+            }
+            const int fuzz = (int) DriveType::Fuzz, fold = (int) DriveType::Fold, rect = (int) DriveType::Rectify, tape = (int) DriveType::Tape;
+            const bool fuzzAsym = dsp::shapeDrive (fuzz, 2.0f) > 0.99f && dsp::shapeDrive (fuzz, -2.0f) > -0.8f;
+            const bool folds = dsp::shapeDrive (fold, 2.0f) < 0.01f;   // twice full scale folds back to silence
+            const bool rectifies = std::abs (dsp::shapeDrive (rect, -0.5f) - dsp::shapeDrive (rect, 0.5f)) < 1.0e-6f && dsp::shapeDrive (rect, -0.5f) > 0.0f;
+            const bool tapeAsym = dsp::shapeDrive (tape, 5.0f) > 0.8f && dsp::shapeDrive (tape, -5.0f) > -0.8f
+                               && std::abs (dsp::shapeDrive (tape, 0.01f) - 0.01f) < 1.0e-3f;
+            check (shapes && fuzzAsym && folds && rectifies && tapeAsym,
+                   "Drive shapes: silent at 0, within full scale, Fuzz and Tape asymmetric, Fold folds back, Rectify flips the lower half");
+            check (ok && differ, "every Drive type sounds, stays finite and differs from the others");
+
+            track (3).sound.driveType = DriveType::Fuzz;
+            auto v = Document::fromVar (juce::JSON::parse (juce::JSON::toString (s().doc.toVar())));
+            check (v.tracks[3].sound.driveType == DriveType::Fuzz, "the Drive type survives a JSON round trip");
+        }
+        track (3).sound = SoundSettings();
         s().rechop (track (3));
 
         // 16 tracks max
@@ -1153,16 +1203,18 @@ struct Runner : juce::Timer
         check (! wv->isZoomed(), "Sample shows the whole sample outside the slice editor too");
         wv->zoomAround (10.0f, 4.0);
         check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "zoom works outside the slice editor");
-        wv->zoomAround (wv->getWidth() * 0.5f, 1.0);
-        const double end = wv->visibleStart() + wv->visibleLength();
+        wv->resetZoom();
+        wv->zoomAround (wv->getWidth() * 0.5f, 4.0);   // the middle quarter, away from both ends
+        const double begin = wv->visibleStart();
+        check (begin > 0.3, "zoomed in on the middle of the sample");
         if (auto* b = findButton (*editor, "+")) b->onClick();
         check (std::abs (wv->visibleLength() - 0.125) < 1.0e-9, "+ zooms in 2x");
-        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "+ keeps the right edge of the view in place");
+        check (std::abs (wv->visibleStart() - begin) < 1.0e-9, "+ keeps the left edge of the view in place");
         if (auto* b = findButton (*editor, juce::String::fromUTF8 ("\xe2\x88\x92"))) b->onClick();
         check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "- zooms out 2x");
-        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "- keeps the right edge of the view in place");
+        check (std::abs (wv->visibleStart() - begin) < 1.0e-9, "- keeps the left edge of the view in place");
         wv->zoomBy (3.0);   // Ctrl+scroll and pinch
-        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "Ctrl+scroll zoom keeps the right edge of the view in place");
+        check (std::abs (wv->visibleStart() - begin) < 1.0e-9, "Ctrl+scroll zoom keeps the left edge of the view in place");
         wv->zoomBy (1.0 / 3.0);
         if (auto* b = findButton (*editor, "Edit slices")) b->onClick();
         check (wv->editing && std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "the slice editor opens with the same zoom");

@@ -49,6 +49,12 @@ const char* ampModeName (AmpMode m)
     return n[(int) m];
 }
 
+const char* driveName (DriveType d)
+{
+    static const char* n[] = { "Drive", "Overdrive", "Tape", "Fuzz", "Clip", "Fold", "Rectify" };
+    return n[juce::jlimit (0, (int) DriveType::Count - 1, (int) d)];
+}
+
 int SoundSettings::defaultStereoAmt (StereoMode m)
 {
     static const int d[] = { 0, 0, 50, 150, 12, 60 };
@@ -282,6 +288,7 @@ static juce::var soundToVar (const SoundSettings& s)
     o->setProperty ("gain", s.gain);
     o->setProperty ("autoGain", s.autoGain);
     o->setProperty ("drive", s.drive);
+    o->setProperty ("driveType", juce::String (driveName (s.driveType)));
     o->setProperty ("bitRed", s.bitRed);
     o->setProperty ("srRed", s.srRed);
     o->setProperty ("stereo", juce::String (stereoName (s.stereo)));
@@ -359,6 +366,7 @@ static SoundSettings soundFromVar (const juce::var& v)
     s.gain = gi ("gain", 0, -12, 24);
     s.autoGain = (bool) v.getProperty ("autoGain", true);
     s.drive = gi ("drive", 0, 0, 127);
+    s.driveType = enumByName<DriveType> (v.getProperty ("driveType", "Drive").toString(), (int) DriveType::Count, driveName, DriveType::Drive);
     s.bitRed = gi ("bitRed", 0, 0, 127);
     s.srRed = gi ("srRed", 0, 0, 127);
     s.stereo = enumByName<StereoMode> (v.getProperty ("stereo", "Original").toString(), (int) StereoMode::Count, stereoName, StereoMode::Original);

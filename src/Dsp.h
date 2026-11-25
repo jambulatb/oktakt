@@ -14,6 +14,31 @@ inline float fastTanh (float x)
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
+// Drive shapes, in the order of DriveType: x is the signal after the Drive gain.
+// Drive: soft tanh. Overdrive: asymmetric like a tube (even harmonics). Tape: a slower, rounder knee,
+// a little asymmetric. Fuzz: more gain, one side clipped hard and the other soft. Clip: hard clipping.
+// Fold: a wavefolder, loud parts fold back instead of flattening. Rectify: full-wave, an octave up.
+// Overdrive, Tape, Fuzz and Rectify leave a DC offset: the voice removes it after the shaper.
+inline float shapeDrive (int type, float x)
+{
+    switch (type)
+    {
+        case 1:   return x >= 0.0f ? fastTanh (x) : 0.5f * fastTanh (2.0f * x);   // the lower half squashed harder
+        case 2:   return x >= 0.0f ? x / (1.0f + x) : 0.8f * x / (0.8f - x);       // slope 1 at 0, tops out at +1 / −0.8
+        case 3:
+        {
+            x *= 3.0f;
+            return x > 0.0f ? std::min (x, 1.0f) : fastTanh (x * 0.6f) * 0.75f;
+        }
+        case 4:   return juce::jlimit (-1.0f, 1.0f, x);
+        case 5:   return std::sin (x * 1.5707963f);
+        case 6:   return fastTanh (std::abs (x));
+        default:  return fastTanh (x);
+    }
+}
+
+inline bool driveLeavesDc (int type) { return type == 1 || type == 2 || type == 3 || type == 6; }
+
 // Knob 0…127 → frequency 20 Hz…20 kHz
 inline float knobToHz (float v) { return 20.0f * std::pow (1000.0f, juce::jlimit (0.0f, 127.0f, v) / 127.0f); }
 

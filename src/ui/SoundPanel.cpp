@@ -177,7 +177,7 @@ void WaveView::zoomAround (float x, double factor)
 
 void WaveView::zoomBy (double factor)
 {
-    zoomAround ((float) getWidth(), factor);
+    zoomAround (0.0f, factor);
 }
 
 bool WaveView::overOverview (juce::Point<float> p) const
@@ -806,8 +806,8 @@ SoundPanel::SoundPanel (Session& s, UiHost& h) : session (s), host (h), wave (s)
 #else
     const juce::String zoomKey = "Ctrl";
 #endif
-    zoomBtn (zoomOut, juce::String::fromUTF8 ("\xe2\x88\x92"), "Zoom out, the right edge of the view stays in place", [this] { wave.zoomBy (0.5); });
-    zoomBtn (zoomIn, "+", "Zoom in, the right edge of the view stays in place. " + zoomKey + "+scroll or pinch on the wave does the same", [this] { wave.zoomBy (2.0); });
+    zoomBtn (zoomOut, juce::String::fromUTF8 ("\xe2\x88\x92"), "Zoom out, the left edge of the view stays in place", [this] { wave.zoomBy (0.5); });
+    zoomBtn (zoomIn, "+", "Zoom in, the left edge of the view stays in place. " + zoomKey + "+scroll or pinch on the wave does the same", [this] { wave.zoomBy (2.0); });
     zoomBtn (zoomBar, "Bar", "Zoom to one bar: the first one, or the one in the middle of the view", [this] { wave.zoomToBar(); });
     zoomBtn (zoomAll, "Sample", "Show the whole sample. Double-clicking the ruler does the same", [this] { wave.resetZoom(); });
     wave.onZoomChanged = [this] { updateZoomButtons(); };
@@ -1304,6 +1304,28 @@ void SoundPanel::rebuildBlocks()
     // CHARACTER
     {
         int bi = newBlock ("CHARACTER", 3);
+        {
+            auto h = header (bi);
+            auto& dm = addMenu ([this] { auto* tr = session.selectedTrack(); return juce::String (driveName (tr ? tr->sound.driveType : DriveType::Drive)); },
+                                [this] (Btn& b)
+                                {
+                                    juce::PopupMenu pm;
+                                    auto* tr = session.selectedTrack();
+                                    if (! tr) return;
+                                    for (int i = 0; i < (int) DriveType::Count; ++i) pm.addItem (i + 1, driveName ((DriveType) i), true, (int) tr->sound.driveType == i);
+                                    showMenu (pm, &b, [this, &b] (int r)
+                                    {
+                                        auto* t2 = session.selectedTrack();
+                                        if (r <= 0 || ! t2) return;
+                                        session.checkpoint();
+                                        t2->sound.driveType = (DriveType) (r - 1);
+                                        session.changed();
+                                        b.repaint();
+                                    }, 120);
+                                });
+            dm.setTooltip (juce::String::fromUTF8 ("How Drive distorts. Drive: soft and warm · Overdrive: uneven like a tube amp · Tape: rounder and gentler · Fuzz: much more gain, buzzy · Clip: hard clipping · Fold: loud parts fold back, metallic · Rectify: an octave up, rough"));
+            place (dm, { h.getRight() - 86, h.getY(), 86, 20 });
+        }
         auto gc = cell (bi, 0);
         auto& gain = addKnob ("Gain", -12, 24, 0, [] (Track& x) -> int& { return x.sound.gain; }, [] (int v) { return sgn (v) + " dB"; });
         place (gain, gc);

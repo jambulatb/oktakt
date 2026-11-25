@@ -44,6 +44,9 @@ struct Engine::Voice
 
     float pre = 1, drivePre = 1, comp = 1;
     bool driveOn = false;
+    int driveType = 0;
+    bool dcOn = false;                 // Overdrive and Fuzz: remove the DC offset of the asymmetric shape
+    float dcCoef = 0.999f, dcX[2] {}, dcY[2] {};
     bool bitsOn = false;
     float bitStep = 0;
     bool srOn = false;
@@ -160,7 +163,22 @@ struct Engine::Voice
                 sr_ = std::round (sr_ / bitStep) * bitStep;
             }
             sl *= pre; sr_ *= pre;
-            if (driveOn) { sl = fastTanh (sl * drivePre); sr_ = fastTanh (sr_ * drivePre); }
+            if (driveOn)
+            {
+                sl = shapeDrive (driveType, sl * drivePre);
+                sr_ = shapeDrive (driveType, sr_ * drivePre);
+                if (dcOn)
+                {
+                    float* ch[2] = { &sl, &sr_ };
+                    for (int c = 0; c < 2; ++c)
+                    {
+                        const float x = *ch[c];
+                        dcY[c] = x - dcX[c] + dcCoef * dcY[c];
+                        dcX[c] = x;
+                        *ch[c] = dcY[c];
+                    }
+                }
+            }
             sl *= comp; sr_ *= comp;
 
             if (filterOn)
@@ -549,11 +567,22 @@ void Engine::startVoice (const EngineSnapshot& snap, const Event& e, double bpmN
     v->pre = juce::Decibels::decibelsToGain ((float) g);
     v->driveOn = drive > 0;
     v->drivePre = 1.0f + std::pow (drive / 127.0f, 2.0f) * 24.0f;
+    v->driveType = (int) s.driveType;
+    v->dcOn = v->driveOn && driveLeavesDc ((int) s.driveType);
+    v->dcCoef = std::exp (-2.0f * juce::MathConstants<float>::pi * 10.0f / fsr);   // 10 Hz
+    v->dcX[0] = v->dcX[1] = v->dcY[0] = v->dcY[1] = 0.0f;
     v->comp = 1.0f;
     if (s.autoGain)
     {
-        float m = v->pre * (v->driveOn ? std::tanh (v->drivePre * 0.5f) / 0.5f : 1.0f);
-        v->comp = 1.0f / juce::jmax (0.05f, m);
+        // The level a half-scale peak comes out at; Fold never goes past full scale, its peaks just fold
+        float shaped = 1.0f;
+        if (v->driveOn)
+        {
+            const float x = v->drivePre * 0.5f;
+            shaped = s.driveType == DriveType::Fold ? juce::jmin (x, 1.0f) / 0.5f
+                                                    : std::abs (shapeDrive ((int) s.driveType, x)) / 0.5f;
+        }
+        v->comp = 1.0f / juce::jmax (0.05f, v->pre * shaped);
     }
     v->bitsOn = bits > 0;
     v->bitStep = std::pow (2.0f, 1.0f - (16.0f - bits / 127.0f * 14.0f));
