@@ -297,6 +297,47 @@ struct Runner : juce::Timer
         o = onsets (render (48000));
         check (o.size() == 1 && near (o[0], 27000), "micro +12: onset " + list (o));
 
+        // A negative Micro on the first hit plays it once, at the end of the pass before (not at the very start)
+        {
+            clearAll();
+            setHits (0, { 0, 8 });
+            setHitParam (track (0), hit (0, 0), ParamId::Micro, -12);
+            s().changed();
+            stopAndFlush();
+            e().hitsStarted = 0;
+            o = onsets (render (96000 * 3));
+            check (e().hitsStarted.load() == 6 && o.size() == 6 && near (o[0], 48000) && near (o[1], 93000) && near (o[2], 144000),
+                   "Micro -12 on the first hit: once per pass, half a step early (" + list (o) + ")");
+
+            // Moved later while playing, right after it played: it does not play again in that pass
+            for (int to : { 0, 6 })
+            {
+                clearAll();
+                setHits (0, { 0, 8 });
+                setHitParam (track (0), hit (0, 0), ParamId::Micro, -12);
+                s().changed();
+                stopAndFlush();
+                e().hitsStarted = 0;
+                render (96000 - 1024);   // the first hit of pass 2 has just played, half a step before the bar line
+                setHitParam (track (0), hit (0, 0), ParamId::Micro, to);
+                s().changed();
+                render (96000 - 1024);   // up to just before the third pass
+                check (e().hitsStarted.load() == 3,
+                       "Micro -12 -> " + juce::String (to) + " while playing: no double hit (" + juce::String (e().hitsStarted.load()) + " hits, 3 expected)");
+            }
+
+            // and plays again on the next start
+            clearAll();
+            setHits (0, { 0 });
+            s().changed();
+            stopAndFlush();
+            e().hitsStarted = 0;
+            render (24000);
+            stopAndFlush();
+            render (24000);
+            check (e().hitsStarted.load() == 2, "a hit plays again after stop and play");
+        }
+
         // POSITION Micro +12 moves every hit half a step later, pinned ones too
         clearAll();
         setHits (0, { 0, 8 });
@@ -416,9 +457,9 @@ struct Runner : juce::Timer
             setHits (2, { 0 });
             hit (2, 0).pinned = true;
             auto& tp = s().curPart().tracks[track (2).id];
-            setEmptyRandom (track (2), tp, keyOf (0, 8), 100);
-            setEmptyRandom (track (2), tp, keyOf (0, 4), 0);   // the same as the track's: not kept
-            check (tp.emptyRandom.size() == 1 && emptyRandomAt (track (2), &tp, keyOf (0, 8)) == 100,
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Random, 100);
+            setEmptyValue (track (2), tp, keyOf (0, 4), ParamId::Random, 0);   // the same as the track's: not kept
+            check (tp.emptySteps.size() == 1 && emptyValueAt (track (2), &tp, keyOf (0, 8), ParamId::Random) == 100,
                    "an empty step keeps its own Random only when it differs from the track's");
             s().changed();
             stopAndFlush();
@@ -435,6 +476,59 @@ struct Runner : juce::Timer
             check (onBeat == bars && onStep9 > 0 && elsewhere == 0,
                    "empty-step Random adds hits on that step only (" + juce::String (onStep9) + " of " + juce::String (bars)
                    + " passes, " + juce::String (elsewhere) + " elsewhere)");
+        }
+
+        // The other rows of an empty step shape its extra hit: hard left, a fixed level, no level jitter
+        {
+            clearAll();
+            setHits (2, { 0 });
+            hit (2, 0).pinned = true;
+            auto& tp = s().curPart().tracks[track (2).id];
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Random, 100);
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Pan, -64);
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Velocity, 127);
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Pan, 0);   // back to the track's: cleared, the step keeps the rest
+            setEmptyValue (track (2), tp, keyOf (0, 8), ParamId::Pan, -64);
+            check (emptyHas (&tp, keyOf (0, 8), ParamId::Pan) && emptyValueAt (track (2), &tp, keyOf (0, 8), ParamId::Velocity) == 127
+                   && emptyValueAt (track (2), &tp, keyOf (0, 4), ParamId::Velocity) == kEmptyVelocity,
+                   "an empty step keeps a value per row");
+            s().changed();
+            stopAndFlush();
+            const int bars = 24;
+            render (96000 * bars);
+            auto peak = [] (const std::vector<float>& x, int a, int b)
+            {
+                float p = 0;
+                for (int i = a; i < juce::jmin ((int) x.size(), b); ++i) p = juce::jmax (p, std::abs (x[(size_t) i]));
+                return p;
+            };
+            int extra = 0;
+            bool leftOnly = true;
+            float lo = 1e9f, hi = 0;
+            for (int b = 0; b < bars; ++b)
+            {
+                const float l = peak (lastL, b * 96000 + 48000, b * 96000 + 90000), r = peak (lastR, b * 96000 + 48000, b * 96000 + 90000);
+                if (l < 0.05f) continue;
+                ++extra;
+                if (r > 0.001f) leftOnly = false;
+                lo = juce::jmin (lo, l); hi = juce::jmax (hi, l);
+            }
+            check (extra > 0 && leftOnly && hi - lo < 0.01f * hi,
+                   "the extra hit of an empty step plays with its Pan and Velocity (" + juce::String (extra) + " of "
+                   + juce::String (bars) + " passes, level " + juce::String (lo, 3) + "-" + juce::String (hi, 3) + ")");
+
+            // Removing the Pan row clears Pan in empty steps too, and a step with nothing left goes away
+            clearEmptyValue (tp, keyOf (0, 8), ParamId::Pan);
+            clearEmptyValue (tp, keyOf (0, 8), ParamId::Velocity);
+            clearEmptyValue (tp, keyOf (0, 8), ParamId::Random);
+            check (tp.emptySteps.empty(), "an empty step with no values left is dropped");
+
+            // Files from before: "emptyRandom" with Random only
+            auto old = juce::JSON::parse (R"({"tracks":[{"id":5,"name":"T"}],"parts":[{"exists":true,"bars":1,"tracks":{},
+                                              "emptyRandom":{"5":[{"bar":0,"step":3,"random":40}]}}]})");
+            auto od = Document::fromVar (old);
+            check (! od.tracks.empty() && emptyValueAt (od.tracks[0], &od.parts[0].tracks[5], keyOf (0, 3), ParamId::Random) == 40,
+                   "older files with the Random of empty steps still load");
         }
 
         // Pan per hit: hard left and hard right on top of a centred track
@@ -862,7 +956,7 @@ struct Runner : juce::Timer
         s().setGrid (track (1).id, 4, 3);
         track (0).micro = 5; track (0).random = 30; track (0).accuracy = 70; track (0).step.chance = 40;
         track (0).output = 0; track (1).output = 3;
-        setEmptyRandom (track (0), s().curPart().tracks[track (0).id], keyOf (0, 2), 80);
+        setEmptyValue (track (0), s().curPart().tracks[track (0).id], keyOf (0, 2), ParamId::Random, 80);
         setHitParam (track (0), hit (0, 4), ParamId::Pan, -20);
         s().copyTrack (track (0).id, 0);
         s().pasteTrack (track (1).id, 0);
@@ -874,7 +968,7 @@ struct Runner : juce::Timer
                    "track bar paste takes the source grid: hits land on the same steps");
             check (t1.micro == 5 && t1.random == 30 && t1.accuracy == 70 && t1.step.chance == 40 && t1.output == 3,
                    "track bar paste carries POSITION, RANDOM and STEP, OUTPUT stays");
-            check (snare.emptyRandom.count (keyOf (0, 2)) == 1 && snare.hits[keyOf (0, 4)].has (ParamId::Pan)
+            check (emptyValueAt (track (1), &snare, keyOf (0, 2), ParamId::Random) == 80 && snare.hits[keyOf (0, 4)].has (ParamId::Pan)
                    && std::find (t1.rows.begin(), t1.rows.end(), ParamId::Pan) != t1.rows.end()
                    && std::find (t1.rows.begin(), t1.rows.end(), ParamId::Random) != t1.rows.end(),
                    "track bar paste carries the Random of empty steps and per-hit Pan, and shows their rows");
@@ -883,7 +977,7 @@ struct Runner : juce::Timer
         }
         track (0).micro = 0; track (0).random = 0; track (0).accuracy = 100; track (0).step = StepSettings();
         track (1).output = 0; track (1).rows.clear();
-        s().curPart().tracks[track (0).id].emptyRandom.clear();
+        s().curPart().tracks[track (0).id].emptySteps.clear();
         hit (0, 4).p[(size_t) ParamId::Pan] = Hit::kUnset;
         s().setGrid (track (1).id, 4, 4);
 
@@ -922,7 +1016,8 @@ struct Runner : juce::Timer
         hit (0, 4).pinned = true;
         setHitParam (track (0), hit (0, 4), ParamId::Cutoff, 40);
         setHitParam (track (0), hit (0, 4), ParamId::Pan, 25);
-        setEmptyRandom (track (0), s().curPart().tracks[track (0).id], keyOf (1, 3), 60);
+        setEmptyValue (track (0), s().curPart().tracks[track (0).id], keyOf (1, 3), ParamId::Random, 60);
+        setEmptyValue (track (0), s().curPart().tracks[track (0).id], keyOf (1, 3), ParamId::Cutoff, 30);
         s().doc.swing = 57;
         s().doc.parts[0].bars = 2;
         auto json = juce::JSON::toString (s().stateToVar());
@@ -932,9 +1027,10 @@ struct Runner : juce::Timer
                && d2.tracks[0].step.chance == 50 && h2.marked && h2.pinned && h2.p[(size_t) ParamId::Cutoff] == 40
                && d2.tracks[3].sound.slices.size() == track (3).sound.slices.size(),
                "pattern JSON round trip keeps tracks, hits, STEP, pins, params and slices");
-        check (h2.p[(size_t) ParamId::Pan] == 25 && d2.parts[0].tracks[d2.tracks[0].id].emptyRandom[keyOf (1, 3)] == 60,
-               "pattern JSON round trip keeps per-hit Pan and the Random of empty steps");
-        s().curPart().tracks[track (0).id].emptyRandom.clear();
+        check (h2.p[(size_t) ParamId::Pan] == 25 && emptyValueAt (d2.tracks[0], &d2.parts[0].tracks[d2.tracks[0].id], keyOf (1, 3), ParamId::Random) == 60
+               && emptyValueAt (d2.tracks[0], &d2.parts[0].tracks[d2.tracks[0].id], keyOf (1, 3), ParamId::Cutoff) == 30,
+               "pattern JSON round trip keeps per-hit Pan and the values of empty steps");
+        s().curPart().tracks[track (0).id].emptySteps.clear();
 
         track (0).step = StepSettings();
         hit (0, 4).marked = false;
@@ -1072,8 +1168,11 @@ struct Runner : juce::Timer
         setHitParam (br, bh[keyOf (1, 0)], ParamId::Random, 60);
         setHitParam (br, bh[keyOf (0, 3)], ParamId::Pan, -30);
         setHitParam (br, bh[keyOf (0, 14)], ParamId::Pan, 40);
-        setEmptyRandom (br, s().doc.parts[0].tracks[br.id], keyOf (0, 1), 0);   // empty steps: their own Random
-        setEmptyRandom (br, s().doc.parts[0].tracks[br.id], keyOf (1, 5), 70);
+        setEmptyValue (br, s().doc.parts[0].tracks[br.id], keyOf (0, 1), ParamId::Random, 0);   // empty steps: their own Random
+        setEmptyValue (br, s().doc.parts[0].tracks[br.id], keyOf (1, 5), ParamId::Random, 70);
+        setEmptyValue (br, s().doc.parts[0].tracks[br.id], keyOf (1, 5), ParamId::Pitch, 5);
+        setEmptyValue (br, s().doc.parts[0].tracks[br.id], keyOf (1, 5), ParamId::Pan, 30);
+        setEmptyValue (br, s().doc.parts[0].tracks[br.id], keyOf (1, 7), ParamId::Pitch, -4);   // Random 20 from the track
         bh[keyOf (0, 0)].pinned = true;
         bh[keyOf (0, 8)].pinned = true;
         bh[keyOf (0, 14)].velocity = 70;

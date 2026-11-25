@@ -1129,7 +1129,7 @@ void SoundPanel::rebuildBlocks()
         b.cols = cols;
         int w = cols * cellW + (cols - 1) * colGap + 16 + 2;
         b.bounds = { bx, 0, w, 120 };
-        bx += w + 8;
+        bx += w + 6;
         blocks.push_back (b);
         return (int) blocks.size() - 1;
     };
@@ -1303,7 +1303,8 @@ void SoundPanel::rebuildBlocks()
     }
     // CHARACTER
     {
-        int bi = newBlock ("CHARACTER", 3);
+        // Distortion in the left column (type in the header, Amount, Gain with AUTO), bit and sample-rate crush in the right
+        int bi = newBlock ("CHARACTER", 2);
         {
             auto h = header (bi);
             auto& dm = addMenu ([this] { auto* tr = session.selectedTrack(); return juce::String (driveName (tr ? tr->sound.driveType : DriveType::Drive)); },
@@ -1323,20 +1324,27 @@ void SoundPanel::rebuildBlocks()
                                         b.repaint();
                                     }, 120);
                                 });
-            dm.setTooltip (juce::String::fromUTF8 ("How Drive distorts. Drive: soft and warm · Overdrive: uneven like a tube amp · Tape: rounder and gentler · Fuzz: much more gain, buzzy · Clip: hard clipping · Fold: loud parts fold back, metallic · Rectify: an octave up, rough"));
+            dm.setTooltip (juce::String::fromUTF8 ("How Amount distorts. Drive: soft and warm · Overdrive: uneven like a tube amp · Tape: rounder and gentler · Fuzz: much more gain, buzzy · Clip: hard clipping · Fold: loud parts fold back, metallic · Rectify: an octave up, rough"));
             place (dm, { h.getRight() - 86, h.getY(), 86, 20 });
         }
-        auto gc = cell (bi, 0);
+        auto& amount = addKnob ("Amount", 0, 127, 0, [] (Track& x) -> int& { return x.sound.drive; });
+        amount.setTooltip ("How hard the sound is driven into the distortion picked in the menu above. A hit can set its own value in the Dist amt row");
+        place (amount, cell (bi, 0));
+        place (addKnob ("Bit red.", 0, 127, 0, [] (Track& x) -> int& { return x.sound.bitRed; }), cell (bi, 1));
+        auto gc = cell (bi, 2);
         auto& gain = addKnob ("Gain", -12, 24, 0, [] (Track& x) -> int& { return x.sound.gain; }, [] (int v) { return sgn (v) + " dB"; });
         place (gain, gc);
         auto& autoPill = addPill ("AUTO", [] (Track& x) -> bool& { return x.sound.autoGain; },
-                                  "Auto: louder Drive or Gain is compensated so the level stays the same");
+                                  "Auto: louder Amount or Gain is compensated so the level stays the same");
         autoPill.font = sans (7.0f, 700);
         autoPill.radius = 2.0f;
         place (autoPill, { gc.getX() + 18 - 13, gc.getY() + 33, 26, 10 });
-        place (addKnob ("Bit red.", 0, 127, 0, [] (Track& x) -> int& { return x.sound.bitRed; }), cell (bi, 1));
-
-        auto sc = cell (bi, 2);
+        place (addKnob ("SR red.", 0, 127, 0, [] (Track& x) -> int& { return x.sound.srRed; }), cell (bi, 3));
+    }
+    // STEREO: the mode on top, its amount under it
+    {
+        int bi = newBlock ("STEREO", 1);
+        auto sc = cell (bi, 0);
         auto& stereo = addMenu ([this] { auto* tr = session.selectedTrack(); return juce::String (stereoName (tr ? tr->sound.stereo : StereoMode::Original)); },
                                 [this, refresher] (Btn& b)
                                 {
@@ -1355,18 +1363,7 @@ void SoundPanel::rebuildBlocks()
                                     }, 130);
                                 });
         stereo.setTooltip (juce::String::fromUTF8 ("Original: as in the file · Mono: summed · Narrow / Wide: stereo width · Haas: one side delayed a few ms · Alternate: hits go left and right in turn"));
-        place (stereo, { sc.getX(), sc.getY() + 18, 82, 20 });
-        auto lbl = std::make_unique<juce::Label> (juce::String(), "Stereo");
-        lbl->setFont (sans (11.0f));
-        lbl->setColour (juce::Label::textColourId, C::muted);
-        lbl->setBorderSize ({ 0, 0, 0, 0 });
-        lbl->setInterceptsMouseClicks (false, false);
-        place (*lbl, { sc.getX(), sc.getY() + 1, 82, 14 });
-        addAndMakeVisible (*lbl);
-        blockKids.push_back (std::move (lbl));
-
-        place (addKnob ("Drive", 0, 127, 0, [] (Track& x) -> int& { return x.sound.drive; }), cell (bi, 3));
-        place (addKnob ("SR red.", 0, 127, 0, [] (Track& x) -> int& { return x.sound.srRed; }), cell (bi, 4));
+        place (stereo, { sc.getX(), sc.getY() + 9, 82, 20 });
 
         const auto mode = t->sound.stereo;
         const int mi = (int) mode;
@@ -1375,7 +1372,7 @@ void SoundPanel::rebuildBlocks()
             auto& k = addKnob ("Amt", 0, 1, 0, [] (Track& x) -> int& { return x.sound.stereoAmt[0]; }, [] (int) { return juce::String::fromUTF8 ("\xe2\x80\x94"); });
             k.active = false;
             k.setTooltip ("Not used by " + juce::String (stereoName (mode)));
-            place (k, cell (bi, 5));
+            place (k, cell (bi, 1));
         }
         else
         {
@@ -1385,7 +1382,7 @@ void SoundPanel::rebuildBlocks()
             auto fmt = mode == StereoMode::Haas ? std::function<juce::String (int)> ([] (int v) { return juce::String (v) + " ms"; })
                                                 : std::function<juce::String (int)> ([] (int v) { return juce::String (v) + "%"; });
             place (addKnob (label, lo, hi, SoundSettings::defaultStereoAmt (mode),
-                            [mi] (Track& x) -> int& { return x.sound.stereoAmt[(size_t) mi]; }, fmt), cell (bi, 5));
+                            [mi] (Track& x) -> int& { return x.sound.stereoAmt[(size_t) mi]; }, fmt), cell (bi, 1));
         }
     }
 

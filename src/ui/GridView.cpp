@@ -213,14 +213,11 @@ GridRows::Target GridRows::hitTest (juce::Point<float> p) const
             {
                 if (bar < session.curPart().bars)
                 {
-                    // The Random row has a value in steps without a hit too
+                    // Steps without a hit have values too: they shape the extra hit Random may play there
                     const bool hit = session.hitAt (tr.id, keyOf (bar, step)) != nullptr;
-                    if (hit || it.param == ParamId::Random)
-                    {
-                        t.kind = hit ? Target::ParamCell : Target::EmptyRandom;
-                        t.bar = bar;
-                        t.step = step;
-                    }
+                    t.kind = hit ? Target::ParamCell : Target::EmptyStep;
+                    t.bar = bar;
+                    t.step = step;
                 }
             }
             return t;
@@ -271,8 +268,19 @@ juce::String GridRows::getTooltip()
                 if (auto* h = session.hitAt (tr.id, keyOf (t.bar, t.step)); h != nullptr && h->pinned)
                     return juce::String (paramInfo (t.param).label) + " does not act on a pinned hit. Alt+click the hit to unpin";
             return {};
-        case Target::EmptyRandom:
-            return juce::String::fromUTF8 ("Random of a step without a hit: how likely an extra quieter hit is here. Drag up or down or scroll, double-click returns to the track's Random");
+        case Target::EmptyStep:
+        {
+            if (t.param == ParamId::Random)
+                return juce::String::fromUTF8 ("Random of a step without a hit: how likely an extra quieter hit is here. Drag up or down or scroll, double-click returns to the track's Random");
+            auto f = session.curPart().tracks.find (tr.id);
+            const TrackPart* tp = f != session.curPart().tracks.end() ? &f->second : nullptr;
+            juce::String what = t.param == ParamId::Velocity ? juce::String ("the level of the extra hit Random may play in this empty step (unset: a random quiet level)")
+                                                             : juce::String (paramInfo (t.param).label) + " of the extra hit Random may play in this empty step";
+            juce::String tip = juce::String::fromUTF8 ("Sets ") + what + ". Drag up or down or scroll, double-click resets";
+            if (emptyValueAt (tr, tp, keyOf (t.bar, t.step), ParamId::Random) <= 0)
+                tip += juce::String::fromUTF8 (". Random is 0 here, so nothing plays yet: raise the track's Random or this step's own in the Random row");
+            return tip;
+        }
         default: return {};
     }
 }
@@ -522,29 +530,32 @@ void GridRows::paintParamRow (juce::Graphics& g, const Item& it)
     auto f = part.tracks.find (t.id);
     const TrackPart* tp = f != part.tracks.end() ? &f->second : nullptr;
 
-    // The Random row: steps without a hit have a value too, the chance of an extra quieter hit there
-    if (it.param == ParamId::Random)
-        for (int b = 0; b < part.bars; ++b)
-            for (int st = 0; st < t.stepsPerBar(); ++st)
-            {
-                const int key = keyOf (b, st);
-                if (tp != nullptr && tp->hits.count (key) != 0) continue;
-                auto r = cellRect (t, b, st, (int) y, it.h);
-                const float rad = juce::jmin (4.0f, r.getWidth() * 0.3f);
-                const bool set = tp != nullptr && tp->emptyRandom.count (key) != 0;
-                const bool hot = hover.kind == Target::EmptyRandom && hover.item >= 0 && items[(size_t) hover.item].y == it.y
-                              && hover.bar == b && hover.step == st;
-                g.setColour (hot ? C::hover : C::cellB);
-                g.fillRoundedRectangle (r, rad);
-                const int v = emptyRandomAt (t, tp, key);
-                if (! set && ! hot && v == 0) continue;   // keep untouched empty steps quiet
-                g.setColour (set ? C::text2 : C::dim);
-                auto text = fmtParam (it.param, v);
-                float fs = r.getWidth() < 26 ? 10.0f : 12.0f;
-                if (juce::GlyphArrangement::getStringWidthInt (mono (fs), text) > r.getWidth() - 2) fs = 9.0f;
-                g.setFont (mono (fs));
-                g.drawText (text, r, juce::Justification::centred, false);
-            }
+    // Steps without a hit have values too: Random is the chance of an extra quieter hit there, the other rows
+    // shape that hit. Only values set here are written, and the one under the pointer; the Random row also
+    // shows the track's value when it is above 0. Values in a step where Random is 0 play nothing: dimmed.
+    const bool isRandom = it.param == ParamId::Random;
+    for (int b = 0; b < part.bars; ++b)
+        for (int st = 0; st < t.stepsPerBar(); ++st)
+        {
+            const int key = keyOf (b, st);
+            if (tp != nullptr && tp->hits.count (key) != 0) continue;
+            auto r = cellRect (t, b, st, (int) y, it.h);
+            const float rad = juce::jmin (4.0f, r.getWidth() * 0.3f);
+            const bool set = emptyHas (tp, key, it.param);
+            const bool hot = hover.kind == Target::EmptyStep && hover.item >= 0 && items[(size_t) hover.item].y == it.y
+                          && hover.bar == b && hover.step == st;
+            g.setColour (hot ? C::hover : C::cellB);
+            g.fillRoundedRectangle (r, rad);
+            const int v = emptyValueAt (t, tp, key, it.param);
+            if (! set && ! hot && ! (isRandom && v > 0)) continue;   // keep untouched empty steps quiet
+            const bool live = isRandom || emptyValueAt (t, tp, key, ParamId::Random) > 0;
+            g.setColour (set && live ? C::text2 : C::dim);
+            auto text = fmtParam (it.param, v);
+            float fs = r.getWidth() < 26 ? 10.0f : 12.0f;
+            if (juce::GlyphArrangement::getStringWidthInt (mono (fs), text) > r.getWidth() - 2) fs = 9.0f;
+            g.setFont (mono (fs));
+            g.drawText (text, r, juce::Justification::centred, false);
+        }
 
     if (tp == nullptr) return;
     for (auto& [key, h] : tp->hits)
@@ -575,7 +586,7 @@ void GridRows::mouseMove (const juce::MouseEvent& e)
     bool changedHover = t.item != hover.item || t.kind != hover.kind || t.bar != hover.bar || t.step != hover.step;
     hover = t;
     auto cursor = juce::MouseCursor::NormalCursor;
-    if (t.kind == Target::Vol || t.kind == Target::Pan || t.kind == Target::ParamCell || t.kind == Target::EmptyRandom)
+    if (t.kind == Target::Vol || t.kind == Target::Pan || t.kind == Target::ParamCell || t.kind == Target::EmptyStep)
         cursor = juce::MouseCursor::UpDownResizeCursor;
     else if (t.kind == Target::Name || t.kind == Target::Swatch)
         cursor = juce::MouseCursor::PointingHandCursor;
@@ -634,13 +645,13 @@ void GridRows::mouseDown (const juce::MouseEvent& e)
             dragStartVal = effectiveValue (t, *h, press.param);
             break;
         }
-        case Target::EmptyRandom:
+        case Target::EmptyStep:
         {
             session.checkpoint();
             drag = Drag::Param;
             dragStartY = e.position.y;
             auto f = session.curPart().tracks.find (t.id);
-            dragStartVal = emptyRandomAt (t, f != session.curPart().tracks.end() ? &f->second : nullptr, keyOf (press.bar, press.step));
+            dragStartVal = emptyValueAt (t, f != session.curPart().tracks.end() ? &f->second : nullptr, keyOf (press.bar, press.step), press.param);
             break;
         }
         default: break;
@@ -694,10 +705,10 @@ void GridRows::mouseDrag (const juce::MouseEvent& e)
             float sens = (info.max - info.min) > 60 ? 1.0f : 0.3f;
             if (e.mods.isShiftDown()) sens *= 0.25f;
             int v = dragStartVal + (int) std::lround (dy * sens);
-            if (press.kind == Target::EmptyRandom)
+            if (press.kind == Target::EmptyStep)
             {
                 if (h != nullptr) break;
-                setEmptyRandom (t, session.trackPart (t.id), key, v);
+                setEmptyValue (t, session.trackPart (t.id), key, press.param, v);
             }
             else
             {
@@ -741,7 +752,11 @@ void GridRows::mouseUp (const juce::MouseEvent& e)
                 {
                     for (auto& [k, h] : f->second.hits)
                         h.p[(size_t) id] = Hit::kUnset;
-                    if (id == ParamId::Random) f->second.emptyRandom.clear();
+                    for (auto e = f->second.emptySteps.begin(); e != f->second.emptySteps.end();)
+                    {
+                        const int k = (e++)->first;   // clearing the last value removes the step
+                        clearEmptyValue (f->second, k, id);
+                    }
                 }
             session.changed();
             break;
@@ -772,11 +787,11 @@ void GridRows::mouseDoubleClick (const juce::MouseEvent& e)
             session.changed();
             break;
         }
-        case Target::EmptyRandom:
+        case Target::EmptyStep:
         {
             if (session.hitAt (tr.id, keyOf (t.bar, t.step)) != nullptr) break;
             session.checkpoint();
-            session.trackPart (tr.id).emptyRandom.erase (keyOf (t.bar, t.step));
+            clearEmptyValue (session.trackPart (tr.id), keyOf (t.bar, t.step), t.param);
             session.changed();
             break;
         }
@@ -788,7 +803,7 @@ void GridRows::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
 {
     auto t = hitTest (e.position);
     if (t.track < 0 || t.track >= (int) session.doc.tracks.size()
-        || ! (t.kind == Target::Vol || t.kind == Target::Pan || t.kind == Target::ParamCell || t.kind == Target::EmptyRandom
+        || ! (t.kind == Target::Vol || t.kind == Target::Pan || t.kind == Target::ParamCell || t.kind == Target::EmptyStep
               || (t.kind == Target::Cell && session.doc.tracks[(size_t) t.track].sound.play == PlayMode::Slices
                   && session.hitAt (session.doc.tracks[(size_t) t.track].id, keyOf (t.bar, t.step)) != nullptr)))
     {
@@ -809,11 +824,11 @@ void GridRows::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
     session.checkpoint (this);
     if (t.kind == Target::Vol) tr.volume = juce::jlimit (0, 127, tr.volume + steps * 2);
     else if (t.kind == Target::Pan) tr.pan = juce::jlimit (-64, 63, tr.pan + steps * 2);
-    else if (t.kind == Target::EmptyRandom)
+    else if (t.kind == Target::EmptyStep)
     {
         auto& tp = session.trackPart (tr.id);
         const int key = keyOf (t.bar, t.step);
-        if (tp.hits.count (key) == 0) setEmptyRandom (tr, tp, key, emptyRandomAt (tr, &tp, key) + steps);
+        if (tp.hits.count (key) == 0) setEmptyValue (tr, tp, key, t.param, emptyValueAt (tr, &tp, key, t.param) + steps);
     }
     else if (auto* h = session.hitAt (tr.id, keyOf (t.bar, t.step)))
         setHitParam (tr, *h, t.param, effectiveValue (tr, *h, t.param) + steps);

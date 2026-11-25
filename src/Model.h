@@ -153,9 +153,10 @@ struct Hit
 struct TrackPart
 {
     std::map<int, Hit> hits;   // key = bar * kKeyStride + step
-    // The Random row in steps without a hit: how likely an extra quieter hit is there, 0…100.
-    // Only values that differ from the track's Random are kept; a hit in the step hides its value.
-    std::map<int, int> emptyRandom;
+    // The automation rows in steps without a hit. Random: how likely an extra quieter hit is there;
+    // the other rows shape that extra hit (Pitch, Pan, Cutoff…). Velocity sits in p[Velocity]: unset
+    // plays a random quiet level. Unset values follow the track; a hit in the step hides these values.
+    std::map<int, Hit> emptySteps;
 };
 
 struct Part
@@ -218,8 +219,12 @@ int baseValue (const Track& t, ParamId id);           // the track's value for a
 int effectiveValue (const Track& t, const Hit& h, ParamId id);
 void setHitParam (const Track& t, Hit& h, ParamId id, int value);   // stores only if different
 int defaultVelocity (const Track& t, int stepInBar);
-int emptyRandomAt (const Track& t, const TrackPart* tp, int key);   // Random of a step without a hit
-void setEmptyRandom (const Track& t, TrackPart& tp, int key, int value);   // stores only if different
+constexpr int kEmptyVelocity = 60;   // shown and dragged from when the level of an empty step's extra hit is unset
+const Hit* emptyStepAt (const TrackPart* tp, int key);
+bool emptyHas (const TrackPart* tp, int key, ParamId id);
+int emptyValueAt (const Track& t, const TrackPart* tp, int key, ParamId id);   // a row's value in a step without a hit
+void setEmptyValue (const Track& t, TrackPart& tp, int key, ParamId id, int value);   // stores only if different
+void clearEmptyValue (TrackPart& tp, int key, ParamId id);
 
 inline int keyOf (int bar, int step) { return bar * kKeyStride + step; }
 inline int barOfKey (int key)        { return key / kKeyStride; }

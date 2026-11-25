@@ -175,14 +175,14 @@ private:
     };
     static PanelSettings panelOf (const Track&);
     void applyPanel (Track&, const PanelSettings&);
-    // Shows the automation rows that pasted hits (or the Random of empty steps) set values in
-    static void addRowsFor (Track&, const std::map<int, Hit>& hits, bool emptyRandom);
+    // Shows the automation rows that pasted hits (or empty steps) set values in
+    static void addRowsFor (Track&, const std::map<int, Hit>& hits, const std::map<int, Hit>& empties);
 
     struct BarTrack
     {
         int per = 16;                     // steps per bar
         std::map<int, Hit> hits;          // by step
-        std::map<int, int> emptyRandom;   // by step
+        std::map<int, Hit> emptySteps;    // by step
         PanelSettings panel;
     };
     struct BarClip
@@ -198,7 +198,7 @@ private:
         juce::String name;
         int per = 16;
         std::map<int, Hit> hits;     // key: bar (relative to `from`) and step
-        std::map<int, int> emptyRandom;
+        std::map<int, Hit> emptySteps;
         PanelSettings panel;
     };
     std::optional<BarClip> barClip;

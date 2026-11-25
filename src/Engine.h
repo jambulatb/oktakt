@@ -69,6 +69,7 @@ public:
     std::atomic<double> posInPart { 0.0 };   // quarter notes from the start of the current pass
     std::atomic<double> currentBpm { 120.0 };
     std::atomic<bool>   previewing { false };
+    std::atomic<int>    hitsStarted { 0 };   // hits the sequencer has started (for the self-check)
 
 private:
     struct Event
@@ -116,6 +117,13 @@ private:
     int passOffset = 0;          // passes already played before partStartPpq (a DAW loop restarts the part, the count goes on)
     uint64_t playSeed = 1;
     std::array<int, kMaxTracks> altCounter {};
+
+    // Hits already played in the current passes. An edit while playing (Micro dragged later, say) can move a
+    // hit that has just played ahead of the playhead again: it must not play twice in the same pass.
+    struct Played { uint32_t track = 0; int key = 0, sub = 0, part = 0, pass = 0; double partStart = 0.0; };
+    std::array<Played, 512> played {};
+    int playedNext = 0, playedCount = 0;
+    bool alreadyPlayed (const Played&);   // remembers it when it is new
 
     // metronome
     struct Click { bool active = false; float phase = 0, inc = 0, amp = 0, decay = 0; int offset = 0; } click;

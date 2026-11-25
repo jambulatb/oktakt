@@ -62,7 +62,7 @@ private:
 
     struct Target
     {
-        enum Kind { None, Swatch, Name, Dots, Vol, Pan, Mute, Solo, Cell, ParamRemove, ParamCell, EmptyRandom, AddParam, Empty } kind = None;
+        enum Kind { None, Swatch, Name, Dots, Vol, Pan, Mute, Solo, Cell, ParamRemove, ParamCell, EmptyStep, AddParam, Empty } kind = None;
         int item = -1, track = -1, bar = -1, step = -1;
         ParamId param = ParamId::Velocity;
     };

@@ -319,9 +319,11 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
 
     static const Hit randomHit;
 
-    auto emit = [&] (double relTime, int ti, const Hit* h, float vel, int slice)
+    // sub: the repeat of a retrig (0 = the hit itself), -1 = an extra hit Random plays in an empty step
+    auto emit = [&] (double relTime, int ti, const Hit* h, float vel, int slice, int key, int passNo, int sub)
     {
         if (relTime < rel0 || relTime >= rel1) return;
+        if (alreadyPlayed ({ doc.tracks[(size_t) ti].id, key, sub, partIdx, passNo, ps })) return;
         int off = (int) std::floor ((ps + relTime - blockStart) / ppqPerSample);
         off = juce::jlimit (0, numSamples - 1, off);
         if (events.size() < events.capacity())
@@ -357,7 +359,6 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
 
         // The track's Random / Accuracy; a hit may set its own in the automation rows
         const double rnd = tr.random / 100.0;
-        const double inacc = (100 - tr.accuracy) / 100.0;
 
         int pFirst = juce::jmax (0, (int) std::floor (rel0 / L) - 1);
         int pLast = (int) std::floor (rel1 / L) + 1;
@@ -422,16 +423,17 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                         float frac = n > 1 ? (float) r / (float) (n - 1) : 0.0f;
                         float g = step.fade < 0 ? 1.0f + step.fade / 100.0f * frac
                                                 : 1.0f - step.fade / 100.0f * (1.0f - frac);
-                        emit (base + tt, ti, &h, vel * juce::jmax (0.0f, g), slice);
+                        emit (base + tt, ti, &h, vel * juce::jmax (0.0f, g), slice, ref.key, passNo, r);
                     }
                 }
                 else
-                    emit (base + t, ti, &h, vel, slice);
+                    emit (base + t, ti, &h, vel, slice, ref.key, passNo, 0);
             }
 
-            // Random also adds quieter hits to empty cells: the track's, or a step's own from the Random row
+            // Random also adds quieter hits to empty cells: the track's, or a step's own from the Random row.
+            // The other rows of an empty step shape its extra hit (Velocity, Micro, Pan, Pitch, Cutoff…)
             const TrackPart* tp = it != part.tracks.end() ? &it->second : nullptr;
-            if (rnd > 0.0 || (tp != nullptr && ! tp->emptyRandom.empty()))
+            if (rnd > 0.0 || (tp != nullptr && ! tp->emptySteps.empty()))
             {
                 int ref = 0;
                 for (int bar = 0; bar < part.bars; ++bar)
@@ -440,24 +442,42 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                     {
                         int key = keyOf (bar, st);
                         if (tp != nullptr && tp->hits.count (key) != 0) continue;
-                        const double cellRnd = emptyRandomAt (tr, tp, key) / 100.0;
+                        const Hit* eh = emptyStepAt (tp, key);
+                        const Hit& gh = eh != nullptr ? *eh : randomHit;
+                        const double cellRnd = effectiveValue (tr, gh, ParamId::Random) / 100.0;
                         if (cellRnd <= 0.0 || hash01 (seed, tr.id, (uint64_t) key, 5) >= cellRnd * 0.25) continue;
                         double t = bar * 4.0 + st * stepLen;
                         if ((st % tr.steps) % 2 == 1) t += swingOff;
-                        t += tr.micro / 24.0 * stepLen;
-                        float vel = (float) (127.0 * (0.35 + 0.25 * hash01 (seed, tr.id, (uint64_t) key, 7)));
-                        if (inacc > 0.0)
+                        t += effectiveValue (tr, gh, ParamId::Micro) / 24.0 * stepLen;
+                        float vel = gh.has (ParamId::Velocity) ? (float) gh.p[(size_t) ParamId::Velocity]
+                                                               : (float) (127.0 * (0.35 + 0.25 * hash01 (seed, tr.id, (uint64_t) key, 7)));
+                        const double cellInacc = (100 - effectiveValue (tr, gh, ParamId::Accuracy)) / 100.0;
+                        if (cellInacc > 0.0)
                         {
-                            t += (hash01 (seed, tr.id, (uint64_t) key, 6) * 2.0 - 1.0) * inacc * 0.5 * stepLen;
-                            vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) key, 9) * 2.0 - 1.0) * inacc * 0.5);
+                            t += (hash01 (seed, tr.id, (uint64_t) key, 6) * 2.0 - 1.0) * cellInacc * 0.5 * stepLen;
+                            vel *= (float) (1.0 + (hash01 (seed, tr.id, (uint64_t) key, 9) * 2.0 - 1.0) * cellInacc * 0.5);
                             vel = juce::jlimit (1.0f, 127.0f, vel);
                         }
-                        emit (base + t, ti, &randomHit, vel, slices ? ref % nSlices : -1);
+                        emit (base + t, ti, &gh, vel, slices ? ref % nSlices : -1, key, passNo, -1);
                     }
                 }
             }
         }
     }
+}
+
+bool Engine::alreadyPlayed (const Played& p)
+{
+    for (int i = 0; i < playedCount; ++i)
+    {
+        const auto& q = played[(size_t) i];
+        if (q.track == p.track && q.key == p.key && q.sub == p.sub && q.part == p.part && q.pass == p.pass && q.partStart == p.partStart)
+            return true;
+    }
+    played[(size_t) playedNext] = p;
+    playedNext = (playedNext + 1) % (int) played.size();
+    playedCount = juce::jmin (playedCount + 1, (int) played.size());
+    return false;
 }
 
 void Engine::startVoice (const EngineSnapshot& snap, const Event& e, double bpmNow)
@@ -800,6 +820,7 @@ void Engine::processSegment (float* const* outs, int numBuses, int numSamples, c
         passOffset = 0;
         playSeed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
         altCounter.fill (0);
+        playedCount = playedNext = 0;
     }
     else if (playing && host.isPlugin && std::abs (host.ppq - expectedHostPpq) > 0.02)
     {
@@ -816,6 +837,7 @@ void Engine::processSegment (float* const* outs, int numBuses, int numSamples, c
         }
         startPpq = partStartPpq = blockStart;
         playSeed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
+        playedCount = playedNext = 0;
     }
     wasPlaying = playing;
     isPlaying = playing;
@@ -899,6 +921,7 @@ void Engine::processSegment (float* const* outs, int numBuses, int numSamples, c
     {
         if (e.offset > cursor) { renderVoices (cursor, e.offset); cursor = e.offset; }
         startVoice (*current, e, bpmNow);
+        hitsStarted.fetch_add (1, std::memory_order_relaxed);
     }
     renderVoices (cursor, numSamples);
 

@@ -15,7 +15,7 @@ static const ParamInfo kParams[kNumParams] = {
     { "Cutoff",        "Cutoff",   "FILTER",    0, 127 },
     { "Resonance",     "Reso",     "FILTER",    0, 127 },
     { "Env amount",    "Env amt",  "FILTER",    -64, 63 },
-    { "Drive",         "Drive",    "CHARACTER", 0, 127 },
+    { "Drive",         "Dist amt", "CHARACTER", 0, 127 },   // the name stays for pattern files
     { "Bit reduction", "Bit red.", "CHARACTER", 0, 127 },
     { "SR reduction",  "SR red.",  "CHARACTER", 0, 127 },
 };
@@ -153,19 +153,46 @@ void setHitParam (const Track& t, Hit& h, ParamId id, int value)
     else h.p[(size_t) id] = (int16_t) value;
 }
 
-int emptyRandomAt (const Track& t, const TrackPart* tp, int key)
+const Hit* emptyStepAt (const TrackPart* tp, int key)
 {
-    if (tp != nullptr)
-        if (auto f = tp->emptyRandom.find (key); f != tp->emptyRandom.end()) return f->second;
-    return t.random;
+    if (tp == nullptr) return nullptr;
+    auto f = tp->emptySteps.find (key);
+    return f != tp->emptySteps.end() ? &f->second : nullptr;
 }
 
-void setEmptyRandom (const Track& t, TrackPart& tp, int key, int value)
+bool emptyHas (const TrackPart* tp, int key, ParamId id)
 {
-    const auto& info = paramInfo (ParamId::Random);
-    value = juce::jlimit (info.min, info.max, value);
-    if (value == t.random) tp.emptyRandom.erase (key);
-    else tp.emptyRandom[key] = value;
+    auto* h = emptyStepAt (tp, key);
+    return h != nullptr && h->has (id);
+}
+
+int emptyValueAt (const Track& t, const TrackPart* tp, int key, ParamId id)
+{
+    if (auto* h = emptyStepAt (tp, key); h != nullptr && h->has (id)) return h->p[(size_t) id];
+    return id == ParamId::Velocity ? kEmptyVelocity : baseValue (t, id);
+}
+
+static bool anySet (const Hit& h)
+{
+    for (auto v : h.p) if (v != Hit::kUnset) return true;
+    return false;
+}
+
+void clearEmptyValue (TrackPart& tp, int key, ParamId id)
+{
+    auto f = tp.emptySteps.find (key);
+    if (f == tp.emptySteps.end()) return;
+    f->second.p[(size_t) id] = Hit::kUnset;
+    if (! anySet (f->second)) tp.emptySteps.erase (f);
+}
+
+void setEmptyValue (const Track& t, TrackPart& tp, int key, ParamId id, int value)
+{
+    const auto& info = paramInfo (id);
+    value = juce::jlimit (id == ParamId::Velocity ? 1 : info.min, info.max, value);
+    // Velocity has no track value to fall back on: once set, it stays until reset
+    if (id != ParamId::Velocity && value == baseValue (t, id)) { clearEmptyValue (tp, key, id); return; }
+    tp.emptySteps[key].p[(size_t) id] = (int16_t) value;
 }
 
 int defaultVelocity (const Track& t, int stepInBar)
@@ -424,7 +451,7 @@ juce::var Document::toVar() const
         po->setProperty ("exists", p.exists);
         po->setProperty ("bars", p.bars);
         auto* tp = new juce::DynamicObject();
-        auto er = std::make_unique<juce::DynamicObject>();   // Random of steps without a hit
+        auto er = std::make_unique<juce::DynamicObject>();   // automation of steps without a hit
         for (auto& [tid, part] : p.tracks)
         {
             juce::Array<juce::var> hits;
@@ -445,22 +472,26 @@ juce::var Document::toVar() const
                 hits.add (juce::var (ho));
             }
             tp->setProperty (juce::String ((int) tid), hits);
-            if (! part.emptyRandom.empty())
+            if (! part.emptySteps.empty())
             {
                 juce::Array<juce::var> steps;
-                for (auto& [key, value] : part.emptyRandom)
+                for (auto& [key, h] : part.emptySteps)
                 {
                     auto* so = new juce::DynamicObject();
                     so->setProperty ("bar", barOfKey (key));
                     so->setProperty ("step", stepOfKey (key));
-                    so->setProperty ("random", value);
+                    auto* pp = new juce::DynamicObject();
+                    for (int i = 0; i < kNumParams; ++i)
+                        if (h.p[(size_t) i] != Hit::kUnset)
+                            pp->setProperty (kParams[i].name, (int) h.p[(size_t) i]);
+                    so->setProperty ("params", juce::var (pp));
                     steps.add (juce::var (so));
                 }
                 er->setProperty (juce::String ((int) tid), steps);
             }
         }
         po->setProperty ("tracks", juce::var (tp));
-        if (! er->getProperties().isEmpty()) po->setProperty ("emptyRandom", juce::var (er.release()));
+        if (! er->getProperties().isEmpty()) po->setProperty ("emptySteps", juce::var (er.release()));
         ps.add (juce::var (po));
     }
     root->setProperty ("parts", ps);
@@ -573,19 +604,32 @@ Document Document::fromVar (const juce::var& v)
                     }
                 }
             }
-            if (auto* obj = po.getProperty ("emptyRandom", {}).getDynamicObject())
-                for (auto& prop : obj->getProperties())
-                {
-                    auto tid = (uint32_t) prop.name.toString().getIntValue();
-                    if (d.findTrack (tid) == nullptr) continue;
-                    if (auto* steps = prop.value.getArray())
-                        for (auto& so : *steps)
-                        {
-                            int bar = juce::jlimit (0, kMaxBars - 1, (int) so.getProperty ("bar", 0));
-                            int step = juce::jlimit (0, kKeyStride - 1, (int) so.getProperty ("step", 0));
-                            p.tracks[tid].emptyRandom[keyOf (bar, step)] = juce::jlimit (0, 100, (int) so.getProperty ("random", 0));
-                        }
-                }
+            // Steps without a hit: "emptySteps" keeps every row, early files had "emptyRandom" with Random only
+            for (auto* prop : { "emptySteps", "emptyRandom" })
+                if (auto* obj = po.getProperty (prop, {}).getDynamicObject())
+                    for (auto& tr : obj->getProperties())
+                    {
+                        auto tid = (uint32_t) tr.name.toString().getIntValue();
+                        if (d.findTrack (tid) == nullptr) continue;
+                        if (auto* steps = tr.value.getArray())
+                            for (auto& so : *steps)
+                            {
+                                int bar = juce::jlimit (0, kMaxBars - 1, (int) so.getProperty ("bar", 0));
+                                int step = juce::jlimit (0, kKeyStride - 1, (int) so.getProperty ("step", 0));
+                                Hit h;
+                                if (so.hasProperty ("random"))
+                                    h.p[(size_t) ParamId::Random] = (int16_t) juce::jlimit (0, 100, (int) so.getProperty ("random", 0));
+                                if (auto* pp = so.getProperty ("params", {}).getDynamicObject())
+                                    for (auto& pr : pp->getProperties())
+                                    {
+                                        bool ok = false;
+                                        auto id = paramFromName (pr.name.toString(), ok);
+                                        if (ok) h.p[(size_t) id] = (int16_t) juce::jlimit (id == ParamId::Velocity ? 1 : paramInfo (id).min,
+                                                                                         paramInfo (id).max, (int) pr.value);
+                                    }
+                                if (anySet (h)) p.tracks[tid].emptySteps[keyOf (bar, step)] = h;
+                            }
+                    }
         }
     }
 
