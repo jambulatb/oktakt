@@ -175,6 +175,11 @@ void WaveView::zoomAround (float x, double factor)
     setView (t - x / g.w * len, len);
 }
 
+void WaveView::zoomBy (double factor)
+{
+    zoomAround ((float) getWidth(), factor);
+}
+
 bool WaveView::overOverview (juce::Point<float> p) const
 {
     return isZoomed() && p.y >= (float) (getHeight() - kOverviewH - 4);
@@ -704,7 +709,7 @@ void WaveView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
     const float sign = w.isReversed ? -1.0f : 1.0f;
     if (e.mods.isCommandDown() || e.mods.isCtrlDown())
     {
-        zoomAround (e.position.x, std::pow (2.0, w.deltaY * sign * 4.0));   // about 1.5x per wheel notch
+        zoomBy (std::pow (2.0, w.deltaY * sign * 4.0));   // about 1.5x per wheel notch
         return;
     }
     if (! isZoomed())
@@ -720,7 +725,8 @@ void WaveView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
 
 void WaveView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
 {
-    zoomAround (e.position.x, scaleFactor);
+    juce::ignoreUnused (e);
+    zoomBy (scaleFactor);
 }
 
 bool WaveView::isInterestedInDragSource (const SourceDetails& d)
@@ -800,8 +806,8 @@ SoundPanel::SoundPanel (Session& s, UiHost& h) : session (s), host (h), wave (s)
 #else
     const juce::String zoomKey = "Ctrl";
 #endif
-    zoomBtn (zoomOut, juce::String::fromUTF8 ("\xe2\x88\x92"), "Zoom out", [this] { wave.zoomAround (wave.getWidth() * 0.5f, 0.5); });
-    zoomBtn (zoomIn, "+", "Zoom in. " + zoomKey + "+scroll or pinch on the wave zooms where the pointer is", [this] { wave.zoomAround (wave.getWidth() * 0.5f, 2.0); });
+    zoomBtn (zoomOut, juce::String::fromUTF8 ("\xe2\x88\x92"), "Zoom out, the right edge of the view stays in place", [this] { wave.zoomBy (0.5); });
+    zoomBtn (zoomIn, "+", "Zoom in, the right edge of the view stays in place. " + zoomKey + "+scroll or pinch on the wave does the same", [this] { wave.zoomBy (2.0); });
     zoomBtn (zoomBar, "Bar", "Zoom to one bar: the first one, or the one in the middle of the view", [this] { wave.zoomToBar(); });
     zoomBtn (zoomAll, "Sample", "Show the whole sample. Double-clicking the ruler does the same", [this] { wave.resetZoom(); });
     wave.onZoomChanged = [this] { updateZoomButtons(); };

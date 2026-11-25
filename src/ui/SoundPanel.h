@@ -51,6 +51,7 @@ public:
     void resetZoom();
     void zoomToBar();                                // the bar under the middle of the view
     void zoomAround (float x, double factor);        // factor > 1 zooms in; the point under x stays put
+    void zoomBy (double factor);                     // − / +, Ctrl+scroll and pinch: the right edge of the view stays put
     bool isZoomed() const { return viewLen < 0.9999; }
     double visibleStart() const { return viewStart; }   // fractions of the timeline under the ruler
     double visibleLength() const { return viewLen; }

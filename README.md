@@ -3,7 +3,7 @@
 A sample sequencer for building drum patterns. Runs as a standalone app or as a VST3 / CLAP plugin (plus Audio Unit on macOS) on Linux, Windows and macOS.
 
 - Up to 16 tracks. Each track has its own grid, so straight, triplet and quintuplet tracks can play side by side.
-- Per-hit settings: velocity, timing offset, pitch, stretch, filter, drive and more.
+- Per-hit settings: velocity, timing offset, pan, pitch, stretch, filter, drive and more.
 - Each pattern has four parts, A–D. Switch between them while it plays: now, at the end of the bar, or at the end of the part.
 - Variation on every pass: play conditions (for example every 2nd pass), chance, retrigger, and randomised hits and timing.
 - Slice loops by hits, into equal parts, or by hand, then drop slices onto the grid.

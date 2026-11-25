@@ -51,10 +51,14 @@ struct Runner : juce::Timer
 
     juce::File sample (const char* rel) { return kit.getChildFile (rel); }
 
+    std::vector<float> lastL, lastR;   // the channels of the last render()
+
     std::vector<float> render (int n, bool playing = true)
     {
         e().playRequest = playing;
         std::vector<float> mono;
+        lastL.clear();
+        lastR.clear();
         juce::AudioBuffer<float> buf (2, 512);
         std::vector<float*> outs (kNumOutputs * 2, nullptr);
         Engine::HostInfo host;
@@ -66,7 +70,11 @@ struct Runner : juce::Timer
             outs[1] = buf.getWritePointer (1);
             e().process (outs.data(), 1, 512, host);
             for (int i = 0; i < 512 && done + i < n; ++i)
+            {
                 mono.push_back (0.5f * (buf.getSample (0, i) + buf.getSample (1, i)));
+                lastL.push_back (buf.getSample (0, i));
+                lastR.push_back (buf.getSample (1, i));
+            }
         }
         return mono;
     }
@@ -401,6 +409,55 @@ struct Runner : juce::Timer
             check (seen.size() >= 3, "random differs between turns of a DAW loop (" + juce::String (seen.size()) + " of " + juce::String (turns) + " turns distinct)");
         }
         track (2).random = 0;
+
+        // Random of an empty step: the track's Random is 0, only step 9 gets extra hits
+        {
+            clearAll();
+            setHits (2, { 0 });
+            hit (2, 0).pinned = true;
+            auto& tp = s().curPart().tracks[track (2).id];
+            setEmptyRandom (track (2), tp, keyOf (0, 8), 100);
+            setEmptyRandom (track (2), tp, keyOf (0, 4), 0);   // the same as the track's: not kept
+            check (tp.emptyRandom.size() == 1 && emptyRandomAt (track (2), &tp, keyOf (0, 8)) == 100,
+                   "an empty step keeps its own Random only when it differs from the track's");
+            s().changed();
+            stopAndFlush();
+            const int bars = 24;
+            o = onsets (render (96000 * bars));
+            int onBeat = 0, onStep9 = 0, elsewhere = 0;
+            for (auto x : o)
+            {
+                const int inBar = x % 96000;
+                if (near (inBar, 0) || near (inBar, 96000)) ++onBeat;
+                else if (near (inBar, 48000)) ++onStep9;
+                else ++elsewhere;
+            }
+            check (onBeat == bars && onStep9 > 0 && elsewhere == 0,
+                   "empty-step Random adds hits on that step only (" + juce::String (onStep9) + " of " + juce::String (bars)
+                   + " passes, " + juce::String (elsewhere) + " elsewhere)");
+        }
+
+        // Pan per hit: hard left and hard right on top of a centred track
+        {
+            clearAll();
+            setHits (2, { 0, 8 });
+            setHitParam (track (2), hit (2, 0), ParamId::Pan, -64);
+            setHitParam (track (2), hit (2, 8), ParamId::Pan, 63);
+            s().changed();
+            stopAndFlush();
+            render (96000);
+            auto peak = [] (const std::vector<float>& x, int a, int b)
+            {
+                float p = 0;
+                for (int i = a; i < juce::jmin ((int) x.size(), b); ++i) p = juce::jmax (p, std::abs (x[(size_t) i]));
+                return p;
+            };
+            const float l1 = peak (lastL, 0, 40000), r1 = peak (lastR, 0, 40000);
+            const float l2 = peak (lastL, 48000, 88000), r2 = peak (lastR, 48000, 88000);
+            check (l1 > 0.05f && r1 < 0.001f && r2 > 0.05f && l2 < 0.03f * r2,
+                   "per-hit Pan: hit 1 left only, hit 2 right only (L/R " + juce::String (l1, 3) + "/" + juce::String (r1, 3)
+                   + ", " + juce::String (l2, 3) + "/" + juce::String (r2, 3) + ")");
+        }
 
         // Accuracy 0%: unpinned hits move, pinned do not
         clearAll();
@@ -751,14 +808,49 @@ struct Runner : juce::Timer
         auto& cHits = s().curPart().tracks[track (0).id].hits;
         check (cHits.size() == 2 && cHits.count (keyOf (0, 0)) && cHits.count (keyOf (0, 4)), "bar 1 of part A copied into part C");
 
-        // Copy one bar of a track into another track with another grid
+        // Copy one bar of a track into another track with another grid: the right panel comes along
         s().setGrid (track (1).id, 4, 3);
+        track (0).micro = 5; track (0).random = 30; track (0).accuracy = 70; track (0).step.chance = 40;
+        track (0).output = 0; track (1).output = 3;
+        setEmptyRandom (track (0), s().curPart().tracks[track (0).id], keyOf (0, 2), 80);
+        setHitParam (track (0), hit (0, 4), ParamId::Pan, -20);
         s().copyTrack (track (0).id, 0);
         s().pasteTrack (track (1).id, 0);
-        auto& snareHits = s().curPart().tracks[track (1).id].hits;
-        check (snareHits.size() == 2 && snareHits.count (keyOf (0, 0)) && snareHits.count (keyOf (0, 3)),
-               "track bar pasted into a 4x3 track lands on the same beats");
+        {
+            auto& snare = s().curPart().tracks[track (1).id];
+            const auto& t1 = track (1);
+            check (snare.hits.size() == 2 && snare.hits.count (keyOf (0, 0)) && snare.hits.count (keyOf (0, 4))
+                   && t1.groups == 4 && t1.steps == 4,
+                   "track bar paste takes the source grid: hits land on the same steps");
+            check (t1.micro == 5 && t1.random == 30 && t1.accuracy == 70 && t1.step.chance == 40 && t1.output == 3,
+                   "track bar paste carries POSITION, RANDOM and STEP, OUTPUT stays");
+            check (snare.emptyRandom.count (keyOf (0, 2)) == 1 && snare.hits[keyOf (0, 4)].has (ParamId::Pan)
+                   && std::find (t1.rows.begin(), t1.rows.end(), ParamId::Pan) != t1.rows.end()
+                   && std::find (t1.rows.begin(), t1.rows.end(), ParamId::Random) != t1.rows.end(),
+                   "track bar paste carries the Random of empty steps and per-hit Pan, and shows their rows");
+            s().undo();
+            check (track (1).groups == 4 && track (1).steps == 3 && track (1).random == 0, "undo restores the target track's panel");
+        }
+        track (0).micro = 0; track (0).random = 0; track (0).accuracy = 100; track (0).step = StepSettings();
+        track (1).output = 0; track (1).rows.clear();
+        s().curPart().tracks[track (0).id].emptyRandom.clear();
+        hit (0, 4).p[(size_t) ParamId::Pan] = Hit::kUnset;
         s().setGrid (track (1).id, 4, 4);
+
+        // Copy a bar of all tracks: each track's panel comes along
+        {
+            const int savedPart = s().part;
+            s().setGrid (track (1).id, 3, 4);
+            track (1).random = 15;
+            s().copyBar (0);
+            s().setGrid (track (1).id, 4, 4);
+            track (1).random = 0;
+            s().pasteBar (1);
+            check (track (1).groups == 3 && track (1).random == 15, "bar paste carries every track's panel settings");
+            s().undo();
+            check (track (1).groups == 4 && track (1).random == 0, "undo reverts the bar paste");
+            s().part = savedPart;
+        }
 
         // Copy all bars of a track from part A into part C
         s().pickPart (0);
@@ -779,6 +871,8 @@ struct Runner : juce::Timer
         hit (0, 4).marked = true;
         hit (0, 4).pinned = true;
         setHitParam (track (0), hit (0, 4), ParamId::Cutoff, 40);
+        setHitParam (track (0), hit (0, 4), ParamId::Pan, 25);
+        setEmptyRandom (track (0), s().curPart().tracks[track (0).id], keyOf (1, 3), 60);
         s().doc.swing = 57;
         s().doc.parts[0].bars = 2;
         auto json = juce::JSON::toString (s().stateToVar());
@@ -788,6 +882,9 @@ struct Runner : juce::Timer
                && d2.tracks[0].step.chance == 50 && h2.marked && h2.pinned && h2.p[(size_t) ParamId::Cutoff] == 40
                && d2.tracks[3].sound.slices.size() == track (3).sound.slices.size(),
                "pattern JSON round trip keeps tracks, hits, STEP, pins, params and slices");
+        check (h2.p[(size_t) ParamId::Pan] == 25 && d2.parts[0].tracks[d2.tracks[0].id].emptyRandom[keyOf (1, 3)] == 60,
+               "pattern JSON round trip keeps per-hit Pan and the Random of empty steps");
+        s().curPart().tracks[track (0).id].emptyRandom.clear();
 
         track (0).step = StepSettings();
         hit (0, 4).marked = false;
@@ -914,7 +1011,7 @@ struct Runner : juce::Timer
         br.sound.play = PlayMode::Slices;
         br.sound.sensitivity = 60;
         s().rechop (br);
-        br.rows = { ParamId::Pitch, ParamId::Cutoff, ParamId::Random };
+        br.rows = { ParamId::Pitch, ParamId::Pan, ParamId::Cutoff, ParamId::Random };
         br.random = 20;
         auto& bh = s().doc.parts[0].tracks[br.id].hits;
         setHitParam (br, bh[keyOf (0, 6)], ParamId::Pitch, 3);
@@ -923,6 +1020,10 @@ struct Runner : juce::Timer
         setHitParam (br, bh[keyOf (0, 10)], ParamId::Cutoff, 45);
         setHitParam (br, bh[keyOf (0, 8)], ParamId::Random, 60);   // pinned: drawn greyed out
         setHitParam (br, bh[keyOf (1, 0)], ParamId::Random, 60);
+        setHitParam (br, bh[keyOf (0, 3)], ParamId::Pan, -30);
+        setHitParam (br, bh[keyOf (0, 14)], ParamId::Pan, 40);
+        setEmptyRandom (br, s().doc.parts[0].tracks[br.id], keyOf (0, 1), 0);   // empty steps: their own Random
+        setEmptyRandom (br, s().doc.parts[0].tracks[br.id], keyOf (1, 5), 70);
         bh[keyOf (0, 0)].pinned = true;
         bh[keyOf (0, 8)].pinned = true;
         bh[keyOf (0, 14)].velocity = 70;
@@ -1052,10 +1153,17 @@ struct Runner : juce::Timer
         check (! wv->isZoomed(), "Sample shows the whole sample outside the slice editor too");
         wv->zoomAround (10.0f, 4.0);
         check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "zoom works outside the slice editor");
+        wv->zoomAround (wv->getWidth() * 0.5f, 1.0);
+        const double end = wv->visibleStart() + wv->visibleLength();
         if (auto* b = findButton (*editor, "+")) b->onClick();
         check (std::abs (wv->visibleLength() - 0.125) < 1.0e-9, "+ zooms in 2x");
+        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "+ keeps the right edge of the view in place");
         if (auto* b = findButton (*editor, juce::String::fromUTF8 ("\xe2\x88\x92"))) b->onClick();
         check (std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "- zooms out 2x");
+        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "- keeps the right edge of the view in place");
+        wv->zoomBy (3.0);   // Ctrl+scroll and pinch
+        check (std::abs (wv->visibleStart() + wv->visibleLength() - end) < 1.0e-9, "Ctrl+scroll zoom keeps the right edge of the view in place");
+        wv->zoomBy (1.0 / 3.0);
         if (auto* b = findButton (*editor, "Edit slices")) b->onClick();
         check (wv->editing && std::abs (wv->visibleLength() - 0.25) < 1.0e-9, "the slice editor opens with the same zoom");
         if (auto* b = findButton (*editor, "Done")) b->onClick();

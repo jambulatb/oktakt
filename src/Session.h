@@ -166,11 +166,29 @@ private:
     bool lastPlaying = false;
     std::vector<double> taps;
 
+    // The track's settings in the right panel that Copy and Paste carry along with the hits:
+    // GRID, POSITION, RANDOM and STEP. OUTPUT stays: it is how the track is wired in the DAW
+    struct PanelSettings
+    {
+        int groups = 4, steps = 4, micro = 0, random = 0, accuracy = 100;
+        StepSettings step;
+    };
+    static PanelSettings panelOf (const Track&);
+    void applyPanel (Track&, const PanelSettings&);
+    // Shows the automation rows that pasted hits (or the Random of empty steps) set values in
+    static void addRowsFor (Track&, const std::map<int, Hit>& hits, bool emptyRandom);
+
+    struct BarTrack
+    {
+        int per = 16;                     // steps per bar
+        std::map<int, Hit> hits;          // by step
+        std::map<int, int> emptyRandom;   // by step
+        PanelSettings panel;
+    };
     struct BarClip
     {
         int part = 0, from = 0;
-        // per track: steps per bar and the hits by step
-        std::map<uint32_t, std::pair<int, std::map<int, Hit>>> data;
+        std::map<uint32_t, BarTrack> data;
     };
     struct TrackClip
     {
@@ -180,6 +198,8 @@ private:
         juce::String name;
         int per = 16;
         std::map<int, Hit> hits;     // key: bar (relative to `from`) and step
+        std::map<int, int> emptyRandom;
+        PanelSettings panel;
     };
     std::optional<BarClip> barClip;
     std::optional<TrackClip> trackClip;

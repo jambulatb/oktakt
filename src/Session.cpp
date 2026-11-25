@@ -367,6 +367,15 @@ void Session::remapGrid (Track& t, int oldPer, int newPer)
             out.emplace (keyOf (bar, ns), h);
         }
         it->second.hits = std::move (out);
+        std::map<int, int> rnd;
+        for (auto& [key, v] : it->second.emptyRandom)
+        {
+            int bar = barOfKey (key), st = stepOfKey (key);
+            if (st >= oldPer) continue;
+            int ns = juce::jmin (newPer - 1, (int) std::lround ((double) st / oldPer * newPer));
+            rnd.emplace (keyOf (bar, ns), v);
+        }
+        it->second.emptyRandom = std::move (rnd);
     }
 }
 
@@ -568,8 +577,12 @@ void Session::setPartBars (int bars)
     checkpoint();
     if (bars < p.bars)
         for (auto& [id, tp] : p.tracks)
+        {
             for (auto it = tp.hits.begin(); it != tp.hits.end();)
                 it = barOfKey (it->first) >= bars ? tp.hits.erase (it) : std::next (it);
+            for (auto it = tp.emptyRandom.begin(); it != tp.emptyRandom.end();)
+                it = barOfKey (it->first) >= bars ? tp.emptyRandom.erase (it) : std::next (it);
+        }
     p.bars = bars;
     changed();
 }
@@ -614,18 +627,70 @@ void Session::clearPart (int index)
 
 static juce::String partLetter (int i) { return juce::String::charToString ((juce::juce_wchar) ('A' + i)); }
 
-// Moves hits of one bar to another grid, keeping their time in the bar
-static void putBarHits (std::map<int, Hit>& dst, int bar, int oldPer, const std::map<int, Hit>& stepHits, int newPer, bool dropSlices)
+// Moves hits (and the Random of empty steps) of one bar to another grid, keeping their time in the bar
+static void putBar (TrackPart& dst, int bar, int oldPer, const std::map<int, Hit>& stepHits,
+                    const std::map<int, int>& stepRandom, int newPer, bool dropSlices)
 {
-    for (auto it = dst.begin(); it != dst.end();)
-        it = barOfKey (it->first) == bar ? dst.erase (it) : std::next (it);
+    auto toStep = [&] (int st) { return juce::jmin (newPer - 1, (int) std::lround ((double) st / oldPer * newPer)); };
+    for (auto it = dst.hits.begin(); it != dst.hits.end();)
+        it = barOfKey (it->first) == bar ? dst.hits.erase (it) : std::next (it);
+    for (auto it = dst.emptyRandom.begin(); it != dst.emptyRandom.end();)
+        it = barOfKey (it->first) == bar ? dst.emptyRandom.erase (it) : std::next (it);
     for (auto& [st, h] : stepHits)
     {
-        int ns = juce::jmin (newPer - 1, (int) std::lround ((double) st / oldPer * newPer));
         auto copy = h;
         if (dropSlices) copy.sliceId = -1;
-        dst.emplace (keyOf (bar, ns), copy);
+        dst.hits.emplace (keyOf (bar, toStep (st)), copy);
     }
+    for (auto& [st, v] : stepRandom)
+        dst.emptyRandom.emplace (keyOf (bar, toStep (st)), v);
+}
+
+static void eraseBar (TrackPart& tp, int bar)
+{
+    for (auto it = tp.hits.begin(); it != tp.hits.end();)
+        it = barOfKey (it->first) == bar ? tp.hits.erase (it) : std::next (it);
+    for (auto it = tp.emptyRandom.begin(); it != tp.emptyRandom.end();)
+        it = barOfKey (it->first) == bar ? tp.emptyRandom.erase (it) : std::next (it);
+}
+
+Session::PanelSettings Session::panelOf (const Track& t)
+{
+    PanelSettings p;
+    p.groups = t.groups;
+    p.steps = t.steps;
+    p.micro = t.micro;
+    p.random = t.random;
+    p.accuracy = t.accuracy;
+    p.step = t.step;
+    return p;
+}
+
+void Session::applyPanel (Track& t, const PanelSettings& p)
+{
+    if (p.groups != t.groups || p.steps != t.steps)
+    {
+        const int oldPer = t.stepsPerBar();
+        t.groups = p.groups;
+        t.steps = p.steps;
+        remapGrid (t, oldPer, t.stepsPerBar());
+    }
+    t.micro = p.micro;
+    t.random = p.random;
+    t.accuracy = p.accuracy;
+    t.step = p.step;
+}
+
+void Session::addRowsFor (Track& t, const std::map<int, Hit>& hits, bool emptyRandom)
+{
+    auto show = [&t] (ParamId id)
+    {
+        if (std::find (t.rows.begin(), t.rows.end(), id) == t.rows.end()) t.rows.push_back (id);
+    };
+    for (int i = 1; i < kNumParams; ++i)
+        for (auto& [k, h] : hits)
+            if (h.has ((ParamId) i)) { show ((ParamId) i); break; }
+    if (emptyRandom) show (ParamId::Random);
 }
 
 void Session::copyBar (int bar)
@@ -636,13 +701,17 @@ void Session::copyBar (int bar)
     for (auto& t : doc.tracks)
     {
         auto& entry = c.data[t.id];
-        entry.first = t.stepsPerBar();
+        entry.per = t.stepsPerBar();
+        entry.panel = panelOf (t);
         auto& p = curPart();
         auto it = p.tracks.find (t.id);
         if (it == p.tracks.end()) continue;
         for (auto& [key, h] : it->second.hits)
-            if (barOfKey (key) == bar && stepOfKey (key) < entry.first)
-                entry.second[stepOfKey (key)] = h;
+            if (barOfKey (key) == bar && stepOfKey (key) < entry.per)
+                entry.hits[stepOfKey (key)] = h;
+        for (auto& [key, v] : it->second.emptyRandom)
+            if (barOfKey (key) == bar && stepOfKey (key) < entry.per)
+                entry.emptyRandom[stepOfKey (key)] = v;
     }
     barClip = c;
     toast ("Copied " + barClipDescription());
@@ -652,8 +721,7 @@ void Session::clearBar (int bar)
 {
     checkpoint();
     for (auto& [id, tp] : curPart().tracks)
-        for (auto it = tp.hits.begin(); it != tp.hits.end();)
-            it = barOfKey (it->first) == bar ? tp.hits.erase (it) : std::next (it);
+        eraseBar (tp, bar);
     toast ("Cleared bar " + juce::String (bar + 1), true);
     changed();
 }
@@ -671,7 +739,9 @@ void Session::pasteBar (int bar)
     {
         auto* t = doc.findTrack (id);
         if (t == nullptr) continue;
-        putBarHits (trackPart (id).hits, bar, entry.first, entry.second, t->stepsPerBar(), false);
+        applyPanel (*t, entry.panel);
+        addRowsFor (*t, entry.hits, ! entry.emptyRandom.empty());
+        putBar (trackPart (id), bar, entry.per, entry.hits, entry.emptyRandom, t->stepsPerBar(), false);
     }
     toast ("Pasted " + barClipDescription() + " into bar " + juce::String (bar + 1), true);
     changed();
@@ -693,16 +763,21 @@ void Session::copyTrack (uint32_t id, int bar)
     c.track = id;
     c.name = t->name;
     c.per = t->stepsPerBar();
+    c.panel = panelOf (*t);
     auto& p = curPart();
     c.bars = p.bars;
     if (auto it = p.tracks.find (id); it != p.tracks.end())
-        for (auto& [key, h] : it->second.hits)
+    {
+        auto take = [&] (int key, auto& dst, const auto& value)
         {
             int b = barOfKey (key), st = stepOfKey (key);
-            if (st >= c.per || b >= p.bars) continue;
-            if (bar < 0) c.hits[key] = h;
-            else if (b == bar) c.hits[keyOf (0, st)] = h;
-        }
+            if (st >= c.per || b >= p.bars) return;
+            if (bar < 0) dst[key] = value;
+            else if (b == bar) dst[keyOf (0, st)] = value;
+        };
+        for (auto& [key, h] : it->second.hits) take (key, c.hits, h);
+        for (auto& [key, v] : it->second.emptyRandom) take (key, c.emptyRandom, v);
+    }
     trackClip = c;
     toast ("Copied " + trackClipDescription());
 }
@@ -720,7 +795,14 @@ void Session::pasteTrack (uint32_t id, int bar)
     auto* t = doc.findTrack (id);
     checkpoint();
     const bool otherTrack = trackClip->track != id;
-    auto& hits = trackPart (id).hits;
+    applyPanel (*t, trackClip->panel);
+    addRowsFor (*t, trackClip->hits, ! trackClip->emptyRandom.empty());
+    auto& tp = trackPart (id);
+    auto barOf = [] (const auto& src, int b, auto& dst)
+    {
+        for (auto& [key, v] : src)
+            if (barOfKey (key) == b) dst[stepOfKey (key)] = v;
+    };
     if (trackClip->from < 0)
     {
         // All bars: the part grows to the length of the copied one, other tracks stay as they are
@@ -729,17 +811,20 @@ void Session::pasteTrack (uint32_t id, int bar)
         for (int b = 0; b < trackClip->bars && b < target.bars; ++b)
         {
             std::map<int, Hit> stepHits;
-            for (auto& [key, h] : trackClip->hits)
-                if (barOfKey (key) == b) stepHits[stepOfKey (key)] = h;
-            putBarHits (hits, b, trackClip->per, stepHits, t->stepsPerBar(), otherTrack);
+            std::map<int, int> stepRandom;
+            barOf (trackClip->hits, b, stepHits);
+            barOf (trackClip->emptyRandom, b, stepRandom);
+            putBar (tp, b, trackClip->per, stepHits, stepRandom, t->stepsPerBar(), otherTrack);
         }
         toast ("Pasted " + trackClipDescription() + " into " + t->name, true);
     }
     else
     {
         std::map<int, Hit> stepHits;
-        for (auto& [key, h] : trackClip->hits) stepHits[stepOfKey (key)] = h;
-        putBarHits (hits, bar, trackClip->per, stepHits, t->stepsPerBar(), otherTrack);
+        std::map<int, int> stepRandom;
+        barOf (trackClip->hits, 0, stepHits);
+        barOf (trackClip->emptyRandom, 0, stepRandom);
+        putBar (tp, bar, trackClip->per, stepHits, stepRandom, t->stepsPerBar(), otherTrack);
         toast ("Pasted " + trackClipDescription() + " into " + t->name + " bar " + juce::String (bar + 1), true);
     }
     changed();
@@ -750,9 +835,7 @@ void Session::clearTrackBar (uint32_t id, int bar)
     auto* t = doc.findTrack (id);
     if (t == nullptr) return;
     checkpoint();
-    auto& hits = trackPart (id).hits;
-    for (auto it = hits.begin(); it != hits.end();)
-        it = barOfKey (it->first) == bar ? hits.erase (it) : std::next (it);
+    eraseBar (trackPart (id), bar);
     toast ("Cleared " + t->name + " bar " + juce::String (bar + 1), true);
     changed();
 }

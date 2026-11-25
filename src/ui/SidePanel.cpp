@@ -74,7 +74,7 @@ SidePanel::SidePanel (Session& s, UiHost& h)
     random.set = [this] (int v) { if (auto* t = session.selectedTrack()) { t->random = v; session.changed(); } };
     random.format = [] (int v) { return juce::String (v) + "%"; };
     random.colour = [this] { auto* t = session.selectedTrack(); return t ? trackColour (t->colour) : C::orange; };
-    random.setTooltip ("Each pass drops some hits, adds quieter ones in empty cells and varies the level. 0% plays exactly what is written. A hit can set its own value in the Random row. Pinned hits stay as they are");
+    random.setTooltip ("Each pass drops some hits, adds quieter ones in empty cells and varies the level. 0% plays exactly what is written. A hit, or a step without one, can set its own value in the Random row. Pinned hits stay as they are");
 
     setupKnob (accuracy, "Accuracy", 0, 100, 100, 32);
     accuracy.get = [this] { auto* t = session.selectedTrack(); return t ? t->accuracy : 100; };

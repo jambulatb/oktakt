@@ -26,7 +26,7 @@ inline juce::String sampleFileName (const juce::String& path)
 // Per-hit automation parameters (the rows under an active track)
 enum class ParamId : int
 {
-    Velocity, Micro, Random, Accuracy,
+    Velocity, Micro, Pan, Random, Accuracy,
     Stretch, Pitch,
     Cutoff, Resonance, EnvAmount,
     Drive, BitReduction, SRReduction,
@@ -150,6 +150,9 @@ struct Hit
 struct TrackPart
 {
     std::map<int, Hit> hits;   // key = bar * kKeyStride + step
+    // The Random row in steps without a hit: how likely an extra quieter hit is there, 0…100.
+    // Only values that differ from the track's Random are kept; a hit in the step hides its value.
+    std::map<int, int> emptyRandom;
 };
 
 struct Part
@@ -212,6 +215,8 @@ int baseValue (const Track& t, ParamId id);           // the track's value for a
 int effectiveValue (const Track& t, const Hit& h, ParamId id);
 void setHitParam (const Track& t, Hit& h, ParamId id, int value);   // stores only if different
 int defaultVelocity (const Track& t, int stepInBar);
+int emptyRandomAt (const Track& t, const TrackPart* tp, int key);   // Random of a step without a hit
+void setEmptyRandom (const Track& t, TrackPart& tp, int key, int value);   // stores only if different
 
 inline int keyOf (int bar, int step) { return bar * kKeyStride + step; }
 inline int barOfKey (int key)        { return key / kKeyStride; }

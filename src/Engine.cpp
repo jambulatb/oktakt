@@ -411,8 +411,9 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                     emit (base + t, ti, &h, vel, slice);
             }
 
-            // The track's Random also adds quieter hits to empty cells
-            if (rnd > 0.0)
+            // Random also adds quieter hits to empty cells: the track's, or a step's own from the Random row
+            const TrackPart* tp = it != part.tracks.end() ? &it->second : nullptr;
+            if (rnd > 0.0 || (tp != nullptr && ! tp->emptyRandom.empty()))
             {
                 int ref = 0;
                 for (int bar = 0; bar < part.bars; ++bar)
@@ -420,8 +421,9 @@ void Engine::collectEvents (const EngineSnapshot& snap, int partIdx, double ps,
                     for (int st = 0; st < per; ++st, ++ref)
                     {
                         int key = keyOf (bar, st);
-                        if (it != part.tracks.end() && it->second.hits.count (key) != 0) continue;
-                        if (hash01 (seed, tr.id, (uint64_t) key, 5) >= rnd * 0.25) continue;
+                        if (tp != nullptr && tp->hits.count (key) != 0) continue;
+                        const double cellRnd = emptyRandomAt (tr, tp, key) / 100.0;
+                        if (cellRnd <= 0.0 || hash01 (seed, tr.id, (uint64_t) key, 5) >= cellRnd * 0.25) continue;
                         double t = bar * 4.0 + st * stepLen;
                         if ((st % tr.steps) % 2 == 1) t += swingOff;
                         t += tr.micro / 24.0 * stepLen;
@@ -504,7 +506,7 @@ void Engine::startVoice (const EngineSnapshot& snap, const Event& e, double bpmN
     const float velGain = std::pow (juce::jlimit (0.0f, 127.0f, e.velocity) / 127.0f, 1.5f);
     const float lvl = tr.volume / 100.0f;
     const float gain = velGain * lvl * lvl;
-    float pan = tr.pan / 64.0f;
+    float pan = effectiveValue (tr, h, ParamId::Pan) / 64.0f;
     if (s.stereo == StereoMode::Alternate)
     {
         int idx = juce::jlimit (0, kMaxTracks - 1, e.track);

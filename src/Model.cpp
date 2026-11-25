@@ -7,6 +7,7 @@ namespace ok
 static const ParamInfo kParams[kNumParams] = {
     { "Velocity",      "Velocity", "HIT",       0, 127 },
     { "Micro",         "Micro",    "HIT",       -23, 23 },
+    { "Pan",           "Pan",      "HIT",       -64, 63 },
     { "Random",        "Random",   "RANDOM",    0, 100 },
     { "Accuracy",      "Accuracy", "RANDOM",    0, 100 },
     { "Stretch",       "Stretch",  "SAMPLE",    25, 400 },
@@ -114,6 +115,7 @@ int baseValue (const Track& t, ParamId id)
     {
         case ParamId::Velocity:     return 100;
         case ParamId::Micro:        return t.micro;
+        case ParamId::Pan:          return t.pan;
         case ParamId::Random:       return t.random;
         case ParamId::Accuracy:     return t.accuracy;
         case ParamId::Stretch:      return s.stretch;
@@ -143,6 +145,21 @@ void setHitParam (const Track& t, Hit& h, ParamId id, int value)
     if (id == ParamId::Velocity) { h.velocity = value; return; }
     if (value == baseValue (t, id)) h.p[(size_t) id] = Hit::kUnset;
     else h.p[(size_t) id] = (int16_t) value;
+}
+
+int emptyRandomAt (const Track& t, const TrackPart* tp, int key)
+{
+    if (tp != nullptr)
+        if (auto f = tp->emptyRandom.find (key); f != tp->emptyRandom.end()) return f->second;
+    return t.random;
+}
+
+void setEmptyRandom (const Track& t, TrackPart& tp, int key, int value)
+{
+    const auto& info = paramInfo (ParamId::Random);
+    value = juce::jlimit (info.min, info.max, value);
+    if (value == t.random) tp.emptyRandom.erase (key);
+    else tp.emptyRandom[key] = value;
 }
 
 int defaultVelocity (const Track& t, int stepInBar)
@@ -399,6 +416,7 @@ juce::var Document::toVar() const
         po->setProperty ("exists", p.exists);
         po->setProperty ("bars", p.bars);
         auto* tp = new juce::DynamicObject();
+        auto er = std::make_unique<juce::DynamicObject>();   // Random of steps without a hit
         for (auto& [tid, part] : p.tracks)
         {
             juce::Array<juce::var> hits;
@@ -419,8 +437,22 @@ juce::var Document::toVar() const
                 hits.add (juce::var (ho));
             }
             tp->setProperty (juce::String ((int) tid), hits);
+            if (! part.emptyRandom.empty())
+            {
+                juce::Array<juce::var> steps;
+                for (auto& [key, value] : part.emptyRandom)
+                {
+                    auto* so = new juce::DynamicObject();
+                    so->setProperty ("bar", barOfKey (key));
+                    so->setProperty ("step", stepOfKey (key));
+                    so->setProperty ("random", value);
+                    steps.add (juce::var (so));
+                }
+                er->setProperty (juce::String ((int) tid), steps);
+            }
         }
         po->setProperty ("tracks", juce::var (tp));
+        if (! er->getProperties().isEmpty()) po->setProperty ("emptyRandom", juce::var (er.release()));
         ps.add (juce::var (po));
     }
     root->setProperty ("parts", ps);
@@ -533,6 +565,19 @@ Document Document::fromVar (const juce::var& v)
                     }
                 }
             }
+            if (auto* obj = po.getProperty ("emptyRandom", {}).getDynamicObject())
+                for (auto& prop : obj->getProperties())
+                {
+                    auto tid = (uint32_t) prop.name.toString().getIntValue();
+                    if (d.findTrack (tid) == nullptr) continue;
+                    if (auto* steps = prop.value.getArray())
+                        for (auto& so : *steps)
+                        {
+                            int bar = juce::jlimit (0, kMaxBars - 1, (int) so.getProperty ("bar", 0));
+                            int step = juce::jlimit (0, kKeyStride - 1, (int) so.getProperty ("step", 0));
+                            p.tracks[tid].emptyRandom[keyOf (bar, step)] = juce::jlimit (0, 100, (int) so.getProperty ("random", 0));
+                        }
+                }
         }
     }
 
